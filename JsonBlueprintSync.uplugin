@@ -1,0 +1,23 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "Blueprint JSON Sync",
+	"Description": "Keeps Blueprint class-default overrides in JSON files and syncs them on save and on editor start.",
+	"Category": "Editor",
+	"CreatedBy": "",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "JsonBlueprintSync",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
