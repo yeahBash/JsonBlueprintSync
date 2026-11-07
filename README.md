@@ -152,3 +152,7 @@ Automation tests are under `JsonBlueprintSync.*`:
 ```
 UnrealEditor-Cmd.exe <Project>.uproject -ExecCmds="Automation RunTests JsonBlueprintSync;Quit" -unattended -nullrhi -nosplash
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
