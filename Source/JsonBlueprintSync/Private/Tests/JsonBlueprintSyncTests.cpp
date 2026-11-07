@@ -18,6 +18,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "StructUtils/InstancedStruct.h"
 #include "UObject/Package.h"
 
 namespace JsonBlueprintSync::Tests
@@ -456,6 +457,75 @@ bool FJsonBlueprintSyncSyncRulesTest::RunTest(const FString&)
 	TestFalse(TEXT("Broken cache reports failure"), Loaded.Load(Path));
 	TestEqual(TEXT("Broken cache is empty"), Loaded.Num(), 0);
 	IFileManager::Get().Delete(*Path);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncInstancedStructTest, "JsonBlueprintSync.InstancedStruct", TestFlags)
+bool FJsonBlueprintSyncInstancedStructTest::RunTest(const FString&)
+{
+	// Actor Blueprint with an FInstancedStruct variable "Payload".
+	UBlueprint* Blueprint = FTestBlueprints::Create(AActor::StaticClass(), TEXT("BP_Instanced_") + FGuid::NewGuid().ToString(EGuidFormats::Digits));
+	const FEdGraphPinType PayloadType(UEdGraphSchema_K2::PC_Struct, NAME_None, FInstancedStruct::StaticStruct(), EPinContainerType::None, false, FEdGraphTerminalType());
+	FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("Payload"), PayloadType);
+	FEdGraphPinType PayloadArrayType = PayloadType;
+	PayloadArrayType.ContainerType = EPinContainerType::Array;
+	FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("Payloads"), PayloadArrayType);
+	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
+	auto Payload = [Blueprint]() -> FInstancedStruct&
+	{
+		const FStructProperty* Property = FindFProperty<FStructProperty>(Blueprint->GeneratedClass, TEXT("Payload"));
+		return *Property->ContainerPtrToValuePtr<FInstancedStruct>(Blueprint->GeneratedClass->GetDefaultObject());
+	};
+	TestFalse(TEXT("Empty payload not captured"), Capture(Blueprint).Defaults.Contains(TEXT("Payload")));
+
+	// Export: the struct type path plus all of its fields.
+	Payload() = FInstancedStruct::Make(FVector(1.0, 2.0, 3.0));
+	const FBlueprintDefaults Initial = Capture(Blueprint);
+	const FString Text = Initial.Defaults.FindRef(TEXT("Payload"));
+	AddInfo(FString::Printf(TEXT("Payload exported as: %s"), *Text));
+	TestTrue(TEXT("Type and value exported"), Text.StartsWith(TEXT("/Script/CoreUObject.Vector(")) && Text.Contains(TEXT("Z=3.")));
+	FBlueprintDefaults Parsed;
+	FString Error;
+	TestTrue(TEXT("Parses its own output"), FromJson(ToJson(Initial), Parsed, Error));
+	TestEqual(TEXT("Round trip is byte-identical"), ToJson(Parsed), ToJson(Initial));
+
+	// Import can change the struct type, not just the values.
+	FBlueprintDefaults Doc = MakeDoc(Blueprint);
+	Doc.Parent = Initial.Parent;
+	Doc.Defaults.Add(TEXT("Payload"), TEXT("/Script/CoreUObject.LinearColor(R=1.000000,G=0.500000,B=0.000000,A=1.000000)"));
+	if (!ImportOk(*this, Blueprint, Doc))
+	{
+		return false;
+	}
+	const FLinearColor* Color = Payload().GetPtr<FLinearColor>();
+	TestTrue(TEXT("Imported type and value"), Color && FMath::IsNearlyEqual(Color->G, 0.5f));
+	TestEqual(TEXT("Re-export is identical"), ToJson(Capture(Blueprint, &Doc)), ToJson(Doc));
+
+	// Reset empties it again.
+	FBlueprintDefaults ResetDoc = MakeDoc(Blueprint);
+	ResetDoc.Reset = { TEXT("Payload") };
+	if (!ImportOk(*this, Blueprint, ResetDoc))
+	{
+		return false;
+	}
+	TestFalse(TEXT("Reset to empty"), Payload().IsValid());
+
+	// A struct type that does not exist is an error, not a silent reset.
+	Payload() = FInstancedStruct::Make(FVector(1.0, 2.0, 3.0));
+	FBlueprintDefaults Bad = MakeDoc(Blueprint);
+	Bad.Defaults.Add(TEXT("Payload"), TEXT("/Script/CoreUObject.NoSuchStruct()"));
+	TestTrue(TEXT("Unknown struct type rejected"), Apply(Blueprint, Bad).HasErrors());
+	TestNotNull(TEXT("Nothing applied"), Payload().GetPtr<FVector>());
+
+	// Arrays of instanced structs: each element keeps its own type.
+	const FString ArrayText = TEXT("(/Script/CoreUObject.Vector(X=1.000000,Y=2.000000,Z=3.000000),/Script/CoreUObject.LinearColor(R=1.000000,G=0.500000,B=0.000000,A=1.000000))");
+	FBlueprintDefaults ArrayDoc = MakeDoc(Blueprint);
+	ArrayDoc.Defaults.Add(TEXT("Payloads"), ArrayText);
+	if (!ImportOk(*this, Blueprint, ArrayDoc))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Array round trip"), Capture(Blueprint).Defaults.FindRef(TEXT("Payloads")), ArrayText);
 	return true;
 }
 

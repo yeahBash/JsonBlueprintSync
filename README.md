@@ -143,6 +143,10 @@ In Git Bash, set `MSYS_NO_PATHCONV=1` so `/Game/...` arguments are not turned in
 - Only properties visible in the Details panel (`CPF_Edit`) are stored. Transient, deprecated, read-only (`EditConst`) and
   instance-only properties are skipped, as are fixed-size C-style arrays.
 - Instanced sub-objects (properties marked `Instanced` and their contents) are skipped.
+- `FInstancedStruct` values are stored as the struct type path plus all of its fields, e.g.
+  `/Script/CoreUObject.Vector(X=1.000000,Y=2.000000,Z=3.000000)`, and an import can change the type. An unknown struct type
+  is an error for an `FInstancedStruct` property, but inside an array or another struct the engine's parser turns it into an
+  empty value without reporting it.
 - Components created in C++ with `CreateDefaultSubobject` are captured but have not been tested yet.
 
 ## Tests
