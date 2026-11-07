@@ -15,7 +15,7 @@ class FObjectPostSaveContext;
 struct FAssetData;
 
 /**
- * Keeps the Blueprint defaults JSON files in sync while the editor runs (see docs/plans/json-blueprint-sync.md):
+ * Keeps the Blueprint defaults JSON files in sync while the editor runs (see the plugin README.md):
  * - On save of a Blueprint under /Game, exports its defaults (the asset wins).
  * - When the asset registry has finished loading, imports JSON files that changed since the last sync (the JSON wins),
  *   unless the Blueprint changed too, in which case a notification lets the user pick. Imported Blueprints are left dirty, never saved.

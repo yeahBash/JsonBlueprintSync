@@ -1,7 +1,7 @@
 using UnrealBuildTool;
 
 // Editor-only module: syncs Blueprint class-default overrides with JSON files.
-// See docs/plans/json-blueprint-sync.md.
+// See README.md in the plugin folder.
 public class JsonBlueprintSync : ModuleRules
 {
 	public JsonBlueprintSync(ReadOnlyTargetRules Target) : base(Target)
