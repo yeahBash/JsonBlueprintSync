@@ -21,6 +21,7 @@
 #include "Misc/StringOutputDevice.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "StructUtils/InstancedStruct.h"
 #include "UObject/PropertyAccessUtil.h"
 #include "UObject/UnrealType.h"
 
@@ -290,7 +291,22 @@ namespace
 		ON_SCOPE_EXIT { LogExec.SetVerbosity(OldVerbosity); };
 
 		FStringOutputDevice Errors;
-		const TCHAR* End = Property->ImportText_Direct(*Text, Dest, Owner, PPF_None, &Errors);
+		const TCHAR* End = *Text;
+		const FStructProperty* StructProperty = CastField<FStructProperty>(Property);
+		if (StructProperty && StructProperty->Struct == FInstancedStruct::StaticStruct())
+		{
+			// FInstancedStruct's parser fails on an unknown struct type after reading the type name, and the engine then retries
+			// with the generic struct parser, which accepts the "(...)" that is left and keeps the old value. Call it directly so
+			// that the failure stands.
+			if (!static_cast<FInstancedStruct*>(Dest)->ImportTextItem(End, PPF_None, Owner, &Errors))
+			{
+				End = nullptr;
+			}
+		}
+		else
+		{
+			End = Property->ImportText_Direct(*Text, Dest, Owner, PPF_None, &Errors);
+		}
 		if (!End)
 		{
 			OutError = Errors.IsEmpty() ? FString::Printf(TEXT("cannot parse '%s'"), *Text) : Errors.TrimStartAndEnd();
