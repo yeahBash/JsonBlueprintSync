@@ -23,11 +23,14 @@ namespace
 		{
 			Result.Add(Pair.Key, Pair.Value);
 		}
-		for (const TPair<FString, TMap<FString, FString>>& Component : Doc.Components)
+		for (const TMap<FString, TMap<FString, FString>>* Maps : { &Doc.Components, &Doc.Widgets })
 		{
-			for (const TPair<FString, FString>& Pair : Component.Value)
+			for (const TPair<FString, TMap<FString, FString>>& Object : *Maps)
 			{
-				Result.Add(Component.Key + TEXT(".") + Pair.Key, Pair.Value);
+				for (const TPair<FString, FString>& Pair : Object.Value)
+				{
+					Result.Add(Object.Key + TEXT(".") + Pair.Key, Pair.Value);
+				}
 			}
 		}
 		for (const FString& Key : Doc.Reset)

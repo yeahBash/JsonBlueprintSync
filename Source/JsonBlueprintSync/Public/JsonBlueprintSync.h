@@ -28,7 +28,13 @@ namespace JsonBlueprintSync
 		/** Component name -> property name -> value text, for component templates. */
 		TMap<FString, TMap<FString, FString>> Components;
 
-		/** Keys to reset to the archetype value: "Property" or "Component.Property". Sorted. */
+		/**
+		 * Widget Blueprints only: widget name -> property name -> value text, for the widgets in the Designer's widget tree,
+		 * diffed against the widget class defaults. "<Widget>.Slot" holds the layout of the widget in its parent panel.
+		 */
+		TMap<FString, TMap<FString, FString>> Widgets;
+
+		/** Keys to reset to the archetype value: "Property", "Component.Property", "Widget.Property" or "Widget.Slot.Property". Sorted. */
 		TArray<FString> Reset;
 	};
 
