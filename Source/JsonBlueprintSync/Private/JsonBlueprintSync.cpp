@@ -1,7 +1,11 @@
 #include "JsonBlueprintSync.h"
 
 #include "JsonBlueprintSyncModule.h"
+#include "BaseWidgetBlueprint.h"
+#include "Blueprint/WidgetTree.h"
 #include "Components/ActorComponent.h"
+#include "Components/PanelSlot.h"
+#include "Components/Widget.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Engine/Blueprint.h"
@@ -216,6 +220,56 @@ namespace
 		return Found;
 	}
 
+	/** Suffix of the entry that holds a widget's layout in its parent panel, e.g. "Title.Slot". */
+	const TCHAR* const SlotSuffix = TEXT(".Slot");
+
+	/**
+	 * Calls Func(Name, Object) for every widget in a Widget Blueprint's Designer tree (including named-slot content), and for its
+	 * layout slot as "<Widget>.Slot". These are the design-time templates the Designer edits; compiling copies them into the class.
+	 * Object names cannot contain '.', so names never clash with the slot entries.
+	 */
+	void ForEachWidget(UBlueprint* Blueprint, TFunctionRef<void(const FString&, UObject*)> Func)
+	{
+		const UBaseWidgetBlueprint* WidgetBlueprint = Cast<UBaseWidgetBlueprint>(Blueprint);
+		UWidgetTree* Tree = WidgetBlueprint ? WidgetBlueprint->WidgetTree.Get() : nullptr;
+		if (!Tree)
+		{
+			return;
+		}
+		Tree->ForEachWidget([&Func](UWidget* Widget)
+		{
+			if (!Widget)
+			{
+				return;
+			}
+			const FString Name = Widget->GetName();
+			Func(Name, Widget);
+			if (Widget->Slot)
+			{
+				Func(Name + SlotSuffix, Widget->Slot);
+			}
+		});
+	}
+
+	UObject* FindWidget(UBlueprint* Blueprint, const FString& Name)
+	{
+		UObject* Found = nullptr;
+		ForEachWidget(Blueprint, [&Found, &Name](const FString& WidgetName, UObject* Object)
+		{
+			if (!Found && EqualsExact(WidgetName, Name))
+			{
+				Found = Object;
+			}
+		});
+		return Found;
+	}
+
+	/** Splits "Object.Property" at the last '.', so "Title.Slot.ZOrder" gives "Title.Slot" and "ZOrder". False for a plain "Property". */
+	bool SplitKey(const FString& Key, FString& OutObject, FString& OutProperty)
+	{
+		return Key.Split(TEXT("."), &OutObject, &OutProperty, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+	}
+
 	/** Finds a property by exact name. Sets OutError if it is missing or not synced. */
 	const FProperty* FindSyncedProperty(const UClass* Class, const FString& Name, FString* OutError = nullptr)
 	{
@@ -261,10 +315,15 @@ namespace
 
 	bool IsCaptured(const FBlueprintDefaults& Doc, const FString& Key)
 	{
-		FString Component, Property;
-		if (Key.Split(TEXT("."), &Component, &Property))
+		FString Object, Property;
+		if (SplitKey(Key, Object, Property))
 		{
-			const TMap<FString, FString>* Values = Doc.Components.Find(Component);
+			// Components (Actor Blueprints) and widgets (Widget Blueprints) never both exist in one Blueprint.
+			const TMap<FString, FString>* Values = Doc.Components.Find(Object);
+			if (!Values)
+			{
+				Values = Doc.Widgets.Find(Object);
+			}
 			return Values && Values->Contains(Property);
 		}
 		return Doc.Defaults.Contains(Key);
@@ -272,11 +331,15 @@ namespace
 
 	bool KeyExists(UBlueprint* Blueprint, const FString& Key)
 	{
-		FString Component, Property;
-		if (Key.Split(TEXT("."), &Component, &Property))
+		FString Object, Property;
+		if (SplitKey(Key, Object, Property))
 		{
-			const TOptional<FComponentTarget> Target = FindComponent(Blueprint, Component);
-			return Target.IsSet() && FindSyncedProperty(Target->Class, Property);
+			if (const TOptional<FComponentTarget> Target = FindComponent(Blueprint, Object))
+			{
+				return FindSyncedProperty(Target->Class, Property) != nullptr;
+			}
+			const UObject* Widget = FindWidget(Blueprint, Object);
+			return Widget && FindSyncedProperty(Widget->GetClass(), Property);
 		}
 		return FindSyncedProperty(Blueprint->GeneratedClass, Key) != nullptr;
 	}
@@ -441,6 +504,27 @@ namespace
 		Out += TEXT("}");
 	}
 
+	/** Object name -> property map, written at the top level of the document (indent level 1). */
+	void AppendObjectMaps(FString& Out, const TMap<FString, TMap<FString, FString>>& Maps)
+	{
+		if (Maps.Num() == 0)
+		{
+			Out += TEXT("{}");
+			return;
+		}
+		Out += TEXT("{\n");
+		const TArray<FString> Names = SortedKeys(Maps);
+		for (int32 i = 0; i < Names.Num(); ++i)
+		{
+			AppendIndent(Out, 2);
+			AppendQuoted(Out, Names[i]);
+			Out += TEXT(": ");
+			AppendStringMap(Out, Maps.FindChecked(Names[i]), 2);
+			Out += i + 1 < Names.Num() ? TEXT(",\n") : TEXT("\n");
+		}
+		Out += TEXT("  }");
+	}
+
 	bool ReadStringMap(const FJsonObject& Object, const FString& Context, TMap<FString, FString>& Out, FString& OutError)
 	{
 		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Object.Values)
@@ -468,6 +552,34 @@ namespace
 			return false;
 		}
 		Out = (*Value)->AsObject();
+		return true;
+	}
+
+	/** Reads an optional top-level field of object name -> property map, e.g. "components". */
+	bool ReadObjectMaps(const FJsonObject& Root, const TCHAR* Name, TMap<FString, TMap<FString, FString>>& Out, FString& OutError)
+	{
+		TSharedPtr<FJsonObject> Object;
+		if (!GetObjectField(Root, Name, Object, OutError))
+		{
+			return false;
+		}
+		if (!Object.IsValid())
+		{
+			return true;
+		}
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Object->Values)
+		{
+			const FString Context = FString::Printf(TEXT("%s.%s"), Name, *Pair.Key);
+			if (!Pair.Value.IsValid() || Pair.Value->Type != EJson::Object)
+			{
+				OutError = Context + TEXT(" must be an object");
+				return false;
+			}
+			if (!ReadStringMap(*Pair.Value->AsObject(), Context, Out.Add(Pair.Key), OutError))
+			{
+				return false;
+			}
+		}
 		return true;
 	}
 }
@@ -534,6 +646,16 @@ FBlueprintDefaults Capture(UBlueprint* Blueprint, const FBlueprintDefaults* Prev
 		}
 	});
 
+	ForEachWidget(Blueprint, [&Doc](const FString& Name, UObject* Widget)
+	{
+		TMap<FString, FString> Values;
+		CaptureObject(Widget, Widget->GetClass()->GetDefaultObject(), Values);
+		if (Values.Num() > 0)
+		{
+			Doc.Widgets.Add(Name, MoveTemp(Values));
+		}
+	});
+
 	if (Previous)
 	{
 		// A key that was listed before but no longer differs was reset locally. Keep it in "reset" so the reset reaches other machines.
@@ -542,11 +664,14 @@ FBlueprintDefaults Capture(UBlueprint* Blueprint, const FBlueprintDefaults* Prev
 		{
 			Candidates.Add(Pair.Key);
 		}
-		for (const TPair<FString, TMap<FString, FString>>& Component : Previous->Components)
+		for (const TMap<FString, TMap<FString, FString>>* Maps : { &Previous->Components, &Previous->Widgets })
 		{
-			for (const TPair<FString, FString>& Pair : Component.Value)
+			for (const TPair<FString, TMap<FString, FString>>& Object : *Maps)
 			{
-				Candidates.Add(Component.Key + TEXT(".") + Pair.Key);
+				for (const TPair<FString, FString>& Pair : Object.Value)
+				{
+					Candidates.Add(Object.Key + TEXT(".") + Pair.Key);
+				}
 			}
 		}
 		for (const FString& Key : Candidates)
@@ -574,23 +699,12 @@ FString ToJson(const FBlueprintDefaults& Doc)
 	Out += TEXT(",\n  \"defaults\": ");
 	AppendStringMap(Out, Doc.Defaults, 1);
 	Out += TEXT(",\n  \"components\": ");
-	if (Doc.Components.Num() == 0)
+	AppendObjectMaps(Out, Doc.Components);
+	if (Doc.Widgets.Num() > 0)
 	{
-		Out += TEXT("{}");
-	}
-	else
-	{
-		Out += TEXT("{\n");
-		const TArray<FString> Names = SortedKeys(Doc.Components);
-		for (int32 i = 0; i < Names.Num(); ++i)
-		{
-			AppendIndent(Out, 2);
-			AppendQuoted(Out, Names[i]);
-			Out += TEXT(": ");
-			AppendStringMap(Out, Doc.Components.FindChecked(Names[i]), 2);
-			Out += i + 1 < Names.Num() ? TEXT(",\n") : TEXT("\n");
-		}
-		Out += TEXT("  }");
+		// Only Widget Blueprints have widgets; other files keep their format.
+		Out += TEXT(",\n  \"widgets\": ");
+		AppendObjectMaps(Out, Doc.Widgets);
 	}
 	Out += TEXT(",\n  \"reset\": ");
 	if (Doc.Reset.Num() == 0)
@@ -626,7 +740,7 @@ bool FromJson(const FString& Json, FBlueprintDefaults& OutDoc, FString& OutError
 		return false;
 	}
 
-	static const TSet<FString> KnownFields = { TEXT("schema"), TEXT("scope"), TEXT("blueprint"), TEXT("parent"), TEXT("defaults"), TEXT("components"), TEXT("reset") };
+	static const TSet<FString> KnownFields = { TEXT("schema"), TEXT("scope"), TEXT("blueprint"), TEXT("parent"), TEXT("defaults"), TEXT("components"), TEXT("widgets"), TEXT("reset") };
 	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Root->Values)
 	{
 		if (!KnownFields.Contains(Pair.Key))
@@ -662,26 +776,10 @@ bool FromJson(const FString& Json, FBlueprintDefaults& OutDoc, FString& OutError
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> Components;
-	if (!GetObjectField(*Root, TEXT("components"), Components, OutError))
+	if (!ReadObjectMaps(*Root, TEXT("components"), OutDoc.Components, OutError)
+		|| !ReadObjectMaps(*Root, TEXT("widgets"), OutDoc.Widgets, OutError))
 	{
 		return false;
-	}
-	if (Components.IsValid())
-	{
-		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Components->Values)
-		{
-			if (!Pair.Value.IsValid() || Pair.Value->Type != EJson::Object)
-			{
-				OutError = FString::Printf(TEXT("components.%s must be an object"), *Pair.Key);
-				return false;
-			}
-			TMap<FString, FString>& Values = OutDoc.Components.Add(Pair.Key);
-			if (!ReadStringMap(*Pair.Value->AsObject(), TEXT("components.") + Pair.Key, Values, OutError))
-			{
-				return false;
-			}
-		}
 	}
 
 	if (const TSharedPtr<FJsonValue>* Reset = Root->Values.Find(TEXT("reset")))
@@ -760,6 +858,26 @@ FApplyResult Apply(UBlueprint* Blueprint, const FBlueprintDefaults& Doc)
 		return ComponentTargets.Add(Name, MoveTemp(Entry)).GetPtrOrNull();
 	};
 
+	TMap<FString, TOptional<FWriteTarget>> WidgetTargets;
+	auto GetWidgetTarget = [&](const FString& Name) -> const FWriteTarget*
+	{
+		if (const TOptional<FWriteTarget>* Cached = WidgetTargets.Find(Name))
+		{
+			return Cached->GetPtrOrNull();
+		}
+		TOptional<FWriteTarget> Entry;
+		if (UObject* Widget = FindWidget(Blueprint, Name))
+		{
+			FWriteTarget Target;
+			Target.Class = Widget->GetClass();
+			Target.Object = Widget;
+			Target.Baseline = Target.Class->GetDefaultObject();
+			Target.ImportOwner = Widget;
+			Entry = MoveTemp(Target);
+		}
+		return WidgetTargets.Add(Name, MoveTemp(Entry)).GetPtrOrNull();
+	};
+
 	// Pass 1: validate everything and parse the values. Nothing is written if anything is wrong.
 	TArray<FPendingWrite> Writes;
 	for (const FString& Key : SortedKeys(Doc.Defaults))
@@ -781,6 +899,21 @@ FApplyResult Apply(UBlueprint* Blueprint, const FBlueprintDefaults& Doc)
 			PrepareWrite(Name + TEXT(".") + Property, Property, &Values.FindChecked(Property), TargetCopy, Result, Writes);
 		}
 	}
+	for (const FString& Name : SortedKeys(Doc.Widgets))
+	{
+		const FWriteTarget* Target = GetWidgetTarget(Name);
+		if (!Target)
+		{
+			Result.Errors.Add(FString::Printf(TEXT("widgets.%s: unknown widget"), *Name));
+			continue;
+		}
+		const FWriteTarget TargetCopy = *Target;
+		const TMap<FString, FString>& Values = Doc.Widgets.FindChecked(Name);
+		for (const FString& Property : SortedKeys(Values))
+		{
+			PrepareWrite(Name + TEXT(".") + Property, Property, &Values.FindChecked(Property), TargetCopy, Result, Writes);
+		}
+	}
 	for (const FString& Key : Doc.Reset)
 	{
 		if (IsCaptured(Doc, Key))
@@ -788,13 +921,17 @@ FApplyResult Apply(UBlueprint* Blueprint, const FBlueprintDefaults& Doc)
 			Result.Errors.Add(FString::Printf(TEXT("%s: listed in both a value and 'reset'"), *Key));
 			continue;
 		}
-		FString Component, Property;
-		if (Key.Split(TEXT("."), &Component, &Property))
+		FString Object, Property;
+		if (SplitKey(Key, Object, Property))
 		{
-			const FWriteTarget* Target = GetComponentTarget(Component);
+			const FWriteTarget* Target = GetComponentTarget(Object);
 			if (!Target)
 			{
-				Result.Errors.Add(FString::Printf(TEXT("reset %s: unknown component"), *Key));
+				Target = GetWidgetTarget(Object);
+			}
+			if (!Target)
+			{
+				Result.Errors.Add(FString::Printf(TEXT("reset %s: unknown component or widget"), *Key));
 				continue;
 			}
 			const FWriteTarget TargetCopy = *Target;

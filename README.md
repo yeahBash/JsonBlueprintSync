@@ -76,6 +76,7 @@ One file per Blueprint under `/Game`, at `<JsonDir>/<package path>.json`. For ex
   that file is applied.
 - **`defaults`** holds the class default object's properties. **`components`** holds component templates, keyed by component
   name. This covers components added in this Blueprint, inherited from a parent Blueprint, or created in C++.
+- **`widgets`** (Widget Blueprints only, see below) holds the Designer's widgets.
 - **A missing key means "leave it alone"**, so deleting a line from the file does not reset the value. To reset a property to the
   parent's value, list it in `reset` (`"FlickerSpeed"`, or `"PointLight.Intensity"` for a component). The list is kept on export.
 - **Arrays and structs are replaced whole.**
@@ -85,6 +86,26 @@ One file per Blueprint under `/Game`, at `<JsonDir>/<package path>.json`. For ex
 
 Applying a value also updates child Blueprints and placed instances that inherited the old value, the same way the Details panel
 does. Instances that override the value keep their override.
+
+### Widget Blueprints
+
+For a Widget Blueprint, the values set in the Designer are stored in a `widgets` section, keyed by widget name. Each widget is
+diffed against the defaults of its widget class. The layout of a widget in its parent panel (anchors, offsets, padding, alignment,
+Z order and so on) is its slot, stored under `"<Widget>.Slot"`:
+
+```json
+  "widgets": {
+    "Title": { "RenderOpacity": "0.500000", "Text": "NSLOCTEXT(\"...\", \"...\", \"Hello\")" },
+    "Title.Slot": { "ZOrder": "3" }
+  },
+```
+
+- Reset keys are `"Title.RenderOpacity"` for a widget and `"Title.Slot.ZOrder"` for its slot.
+- Text values keep their localization key, in Unreal's text format.
+- The section is written only when a Blueprint has widgets with values set, so other Blueprints' files do not have it.
+- Values set on the Widget Blueprint's own class defaults (Class Defaults in the graph editor) still go in `defaults`.
+- Only existing widgets are updated. Adding, removing, renaming or re-parenting widgets is not synced: a file that names a widget
+  the Blueprint does not have is an error, and nothing in it is applied.
 
 ## Syncing in the editor
 
@@ -105,7 +126,8 @@ Sync state is kept in `Saved/JsonBlueprintSync/cache.json`, which is local and s
 Blueprint as of its last save. Files whose hash matches are skipped without loading the Blueprint.
 
 Applying a file in the editor does not compile the Blueprint, because compiling would break undo. The values survive the next
-compile, just like Details-panel edits.
+compile, just like Details-panel edits. For Widget Blueprints, the Designer shows the new values straight away. A running game
+uses the compiled widget tree, which Play In Editor brings up to date by compiling modified Blueprints first.
 
 ## Settings
 
@@ -138,7 +160,8 @@ In Git Bash, set `MSYS_NO_PATHCONV=1` so `/Game/...` arguments are not turned in
 
 ## Limitations
 
-- Only class defaults are stored. Graph logic, functions and variables themselves are not.
+- Only class defaults and Designer values are stored. Graph logic, functions and variables themselves are not. For Widget
+  Blueprints, the widget hierarchy, animations and property bindings are not stored either.
 - Only Blueprints under `/Game` are synced, not plugin content.
 - Only properties visible in the Details panel (`CPF_Edit`) are stored. Transient, deprecated, read-only (`EditConst`) and
   instance-only properties are skipped, as are fixed-size C-style arrays.

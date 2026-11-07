@@ -3,7 +3,13 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetBlueprintGeneratedClass.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Components/PointLightComponent.h"
+#include "Components/TextBlock.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "Engine/Engine.h"
@@ -19,6 +25,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "UObject/Package.h"
+#include "WidgetBlueprint.h"
 
 namespace JsonBlueprintSync::Tests
 {
@@ -173,6 +180,7 @@ bool FJsonBlueprintSyncFormatTest::RunTest(const FString&)
 
 	const FString Empty = ToJson(FBlueprintDefaults());
 	TestTrue(TEXT("Empty maps"), Empty.Contains(TEXT("\"defaults\": {},")) && Empty.Contains(TEXT("\"reset\": []")));
+	TestFalse(TEXT("No widgets section without widgets"), Empty.Contains(TEXT("\"widgets\"")));
 
 	auto Rejects = [this](const TCHAR* What, const FString& Text)
 	{
@@ -456,6 +464,78 @@ bool FJsonBlueprintSyncSyncRulesTest::RunTest(const FString&)
 	TestFalse(TEXT("Broken cache reports failure"), Loaded.Load(Path));
 	TestEqual(TEXT("Broken cache is empty"), Loaded.Num(), 0);
 	IFileManager::Get().Delete(*Path);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncWidgetTest, "JsonBlueprintSync.Widget", TestFlags)
+bool FJsonBlueprintSyncWidgetTest::RunTest(const FString&)
+{
+	// Widget Blueprint with a canvas "Root" holding a text block "Title", built the way the Designer builds it.
+	const FString Name = TEXT("WBP_Test_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	UPackage* Package = CreatePackage(*(TEXT("/Temp/JsonBlueprintSyncTests/") + Name));
+	Package->SetPackageFlags(PKG_InMemoryOnly);
+	UWidgetBlueprint* Blueprint = CastChecked<UWidgetBlueprint>(FKismetEditorUtilities::CreateBlueprint(UUserWidget::StaticClass(), Package,
+		FName(*Name), BPTYPE_Normal, UWidgetBlueprint::StaticClass(), UWidgetBlueprintGeneratedClass::StaticClass()));
+	UCanvasPanel* Root = Blueprint->WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("Root"));
+	Blueprint->WidgetTree->RootWidget = Root;
+	UTextBlock* Title = Blueprint->WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Title"));
+	UCanvasPanelSlot* TitleSlot = Root->AddChildToCanvas(Title);
+	Blueprint->OnVariableAdded(Root->GetFName());
+	Blueprint->OnVariableAdded(Title->GetFName());
+	Title->SetText(FText::FromString(TEXT("Hello")));
+	TitleSlot->SetZOrder(3);
+	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
+
+	// Export: Designer values go under "widgets", the layout in the parent panel under "<Widget>.Slot".
+	const FBlueprintDefaults Initial = Capture(Blueprint);
+	const TMap<FString, FString>* TitleValues = Initial.Widgets.Find(TEXT("Title"));
+	const TMap<FString, FString>* SlotValues = Initial.Widgets.Find(TEXT("Title.Slot"));
+	TestTrue(TEXT("Text captured"), TitleValues && TitleValues->FindRef(TEXT("Text")).Contains(TEXT("Hello")));
+	TestFalse(TEXT("Unchanged value not captured"), TitleValues && TitleValues->Contains(TEXT("RenderOpacity")));
+	TestEqual(TEXT("Slot captured"), SlotValues ? SlotValues->FindRef(TEXT("ZOrder")) : FString(), FString(TEXT("3")));
+	TestEqual(TEXT("Widgets are not components"), Initial.Components.Num(), 0);
+
+	const FString Json = ToJson(Initial);
+	TestTrue(TEXT("Widgets section written"), Json.Contains(TEXT("\"widgets\": {")));
+	FBlueprintDefaults Parsed;
+	FString Error;
+	TestTrue(TEXT("Parses its own output"), FromJson(Json, Parsed, Error));
+	TestEqual(TEXT("Round trip is byte-identical"), ToJson(Parsed), Json);
+
+	// Import: values reach the Designer templates and, after the compile, the class's widget tree.
+	FBlueprintDefaults Doc = Initial;
+	Doc.Widgets.FindOrAdd(TEXT("Title")).Add(TEXT("RenderOpacity"), TEXT("0.500000"));
+	Doc.Widgets.FindOrAdd(TEXT("Title.Slot")).Add(TEXT("ZOrder"), TEXT("7"));
+	if (!ImportOk(*this, Blueprint, Doc))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Template value"), Title->GetRenderOpacity(), 0.5f);
+	TestEqual(TEXT("Slot value"), TitleSlot->GetZOrder(), 7);
+	UWidgetTree* CompiledTree = CastChecked<UWidgetBlueprintGeneratedClass>(Blueprint->GeneratedClass)->GetWidgetTreeArchetype();
+	const UTextBlock* Compiled = CompiledTree ? Cast<UTextBlock>(CompiledTree->FindWidget(TEXT("Title"))) : nullptr;
+	TestTrue(TEXT("Compiled widget tree has the value"), Compiled && FMath::IsNearlyEqual(Compiled->GetRenderOpacity(), 0.5f));
+	TestEqual(TEXT("Re-export is identical"), ToJson(Capture(Blueprint, &Doc)), ToJson(Doc));
+	TestTrue(TEXT("Diff keys include slot keys"), DiffKeys(Initial, Doc).Contains(TEXT("Title.Slot.ZOrder")));
+
+	// Reset keys split at the last '.', so "Title.Slot.ZOrder" targets the slot.
+	FBlueprintDefaults ResetDoc = MakeDoc(Blueprint);
+	ResetDoc.Reset = { TEXT("Title.RenderOpacity"), TEXT("Title.Slot.ZOrder") };
+	if (!ImportOk(*this, Blueprint, ResetDoc))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Value reset"), Title->GetRenderOpacity(), 1.0f);
+	TestEqual(TEXT("Slot value reset"), TitleSlot->GetZOrder(), 0);
+	const FBlueprintDefaults AfterReset = Capture(Blueprint, &Doc);
+	TestTrue(TEXT("Reset recorded on export"), AfterReset.Reset.Contains(TEXT("Title.Slot.ZOrder")) && AfterReset.Reset.Contains(TEXT("Title.RenderOpacity")));
+
+	// An unknown widget is an error, and nothing else in the file is applied.
+	FBlueprintDefaults Bad = MakeDoc(Blueprint);
+	Bad.Widgets.Add(TEXT("Title")).Add(TEXT("RenderOpacity"), TEXT("0.25"));
+	Bad.Widgets.Add(TEXT("Missing")).Add(TEXT("RenderOpacity"), TEXT("0.25"));
+	TestTrue(TEXT("Unknown widget rejected"), Apply(Blueprint, Bad).HasErrors());
+	TestEqual(TEXT("Nothing applied"), Title->GetRenderOpacity(), 1.0f);
 	return true;
 }
 

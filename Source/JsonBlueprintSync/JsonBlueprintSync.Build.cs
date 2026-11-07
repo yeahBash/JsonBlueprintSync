@@ -23,6 +23,9 @@ public class JsonBlueprintSync : ModuleRules
 			"EditorSubsystem",
 			"Slate",
 			"SlateCore",
+			"UMG",
+			// Only the tests use it, to build Widget Blueprints; the library reads them through UnrealEd's UBaseWidgetBlueprint.
+			"UMGEditor",
 		});
 	}
 }
