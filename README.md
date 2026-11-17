@@ -1,12 +1,14 @@
 # JsonBlueprintSync
 
-An Unreal Engine editor plugin that keeps each Blueprint's **class-default overrides** in a JSON file and syncs them both ways:
+An Unreal Engine editor plugin that keeps the values set in **Blueprints, Widget Blueprints and data assets** in JSON files next
+to the project:
 
-- When you save a Blueprint in the editor, its JSON file is written.
-- When the editor starts, JSON files that changed on disk (e.g. after a `git pull`) are applied back to the Blueprints.
+- When you save an asset in the editor, its JSON file is written.
+- When the JSON files change on disk (e.g. after a `git pull`), the editor lists the assets whose JSON differs and lets you apply
+  the changes key by key. For data assets this can happen automatically.
 
-`.uasset` files are binary, so this gives you diffs, code review and merges for Blueprint default values. Only values that
-differ from the parent class are stored, so a file holds just what the Blueprint itself sets.
+`.uasset` files are binary, so this gives you diffs, code review and merges for default values. Only values that differ from the
+archetype are stored (the parent class for a Blueprint, the class for a data asset), so a file holds just what the asset itself sets.
 
 Graph logic (nodes and pins) is out of scope. Every file says `"scope": "defaults"` to make that clear.
 
@@ -52,40 +54,62 @@ Graph logic (nodes and pins) is out of scope. Every file says `"scope": "default
 
 Copy the output folder to the project's `Plugins/JsonBlueprintSync/`. Binaries only work with the engine version they were built with.
 
+## Modes
+
+Each asset type has a mode, set in **Project Settings > Plugins > JSON Blueprint Sync**:
+
+| Mode | Saving the asset | JSON changed on disk |
+|---|---|---|
+| **None** | Nothing. | Ignored. |
+| **Write JSON Only** | Writes the JSON. | Listed in the JSON Sync tab. Applied only when you click **Apply JSON**. |
+| **Two Way** | Writes the JSON. | Applied automatically when the editor starts, unless a key conflicts. Conflicts are listed in the JSON Sync tab. |
+
+| Asset type | Default | Two Way allowed |
+|---|---|---|
+| Blueprints | Write JSON Only | No |
+| Widget Blueprints | Write JSON Only | No |
+| Data assets | Two Way | Yes |
+
+For Blueprints the `.uasset` stays the source of truth: the JSON is for reviewing and merging, and changes come back only when
+someone chooses to apply them. Data assets are plain data, so a JSON edit can be trusted to apply on its own.
+
 ## JSON format
 
-One file per Blueprint under `/Game`, at `<JsonDir>/<package path>.json`. For example, `/Game/Features/Light/BP_Lamp` maps to
+One file per asset under `/Game`, at `<JsonDir>/<package path>.json`. For example, `/Game/Features/Light/BP_Lamp` maps to
 `JsonBlueprintSync/Game/Features/Light/BP_Lamp.json`.
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "scope": "defaults",
-  "blueprint": "/Game/Features/Light/BP_Lamp",
+  "asset": "/Game/Features/Light/BP_Lamp",
   "parent": "/Script/Engine.Actor",
   "defaults": { "bStartOn": "True", "FlickerSpeed": "2.5" },
   "components": {
     "PointLight": { "Intensity": "5000.0", "LightColor": "(R=255,G=200,B=150,A=255)" }
-  },
-  "reset": []
+  }
 }
 ```
 
 - **Values are Unreal property text**: the same format as copy/paste in the Details panel, stored as JSON strings. Structs,
   enums, object references and soft paths round-trip exactly. A value that does not parse is reported as an error and nothing in
   that file is applied.
-- **`defaults`** holds the class default object's properties. **`components`** holds component templates, keyed by component
-  name. This covers components added in this Blueprint, inherited from a parent Blueprint, or created in C++.
-- **`widgets`** (Widget Blueprints only, see below) holds the Designer's widgets.
-- **A missing key means "leave it alone"**, so deleting a line from the file does not reset the value. To reset a property to the
-  parent's value, list it in `reset` (`"FlickerSpeed"`, or `"PointLight.Intensity"` for a component). The list is kept on export.
+- **`defaults`** holds the Blueprint's class default object, or a data asset's own properties.
+- **`components`** (Blueprints) holds component templates, keyed by component name. This covers components added in this
+  Blueprint, inherited from a parent Blueprint, or created in C++.
+- **`widgets`** (Widget Blueprints, see below) holds the Designer's widgets.
+- **The file is complete: a missing key means the archetype's value.** Deleting a line and applying the file resets that property
+  to the parent's (or the class's) value.
 - **Arrays and structs are replaced whole.**
-- **`parent`** is informational: a warning is logged if the Blueprint's actual parent class differs.
-- Output is deterministic: sorted keys, two-space indent, LF line endings, trailing newline, no timestamps. Importing a file and
-  exporting again gives the same bytes.
+- **`parent`** is the parent class of a Blueprint, or the class of a data asset. It is informational: a warning is logged if the
+  asset's actual class differs.
+- Output is deterministic: sorted keys, two-space indent, LF line endings, trailing newline, no timestamps. Applying a file and
+  writing it again gives the same bytes.
+- Files from version 1 of the format (`"schema": 1`, with a `reset` list) are not read. Re-export them: save the asset, or run the
+  commandlet with `-export`.
 
-Applying a value also updates child Blueprints and placed instances that inherited the old value, the same way the Details panel
-does. Instances that override the value keep their override.
+Applying a value also updates child Blueprints, data assets of a Blueprint class, and placed instances that inherited the old value,
+the same way the Details panel does. Instances that override the value keep their override.
 
 ### Widget Blueprints
 
@@ -100,12 +124,17 @@ Z order and so on) is its slot, stored under `"<Widget>.Slot"`:
   },
 ```
 
-- Reset keys are `"Title.RenderOpacity"` for a widget and `"Title.Slot.ZOrder"` for its slot.
+- Keys in the JSON Sync tab are `Title.RenderOpacity` for a widget and `Title.Slot.ZOrder` for its slot.
 - Text values keep their localization key, in Unreal's text format.
 - The section is written only when a Blueprint has widgets with values set, so other Blueprints' files do not have it.
 - Values set on the Widget Blueprint's own class defaults (Class Defaults in the graph editor) still go in `defaults`.
 - Only existing widgets are updated. Adding, removing, renaming or re-parenting widgets is not synced: a file that names a widget
   the Blueprint does not have is an error, and nothing in it is applied.
+
+### Data assets
+
+Any asset whose class derives from `UDataAsset` (including `UPrimaryDataAsset` and Blueprint subclasses of either) is synced. Its
+properties are diffed against its class's defaults. Only properties editable on the asset are stored.
 
 ## Syncing in the editor
 
@@ -113,17 +142,52 @@ Z order and so on) is its slot, stored under `"<Widget>.Slot"`:
 
 | Event | What happens |
 |---|---|
-| Blueprint saved | Its JSON file is written: the Blueprint wins. If the file had been changed outside the editor since the last sync, a notification lists the keys that were overwritten. |
-| Editor start (asset registry loaded) | JSON files that changed since the last sync are applied: the JSON wins. Applied Blueprints are left modified and **never saved automatically**. All changes are one undo step. |
-| Both the file and the Blueprint changed | A notification lists the differing keys, with **Use JSON** and **Keep Blueprint** buttons. Saving the Blueprint also resolves it. |
-| Blueprint renamed | The JSON file moves with it. |
-| Blueprint deleted | The JSON file is deleted. |
+| Editor start (asset registry loaded) | JSON files that changed since the last sync are compared with their assets. Two Way assets with no conflicting key are applied. The rest are listed, and a notification offers **Review** (opens the JSON Sync tab) or **Later**. |
+| Asset saved | Its JSON file is written. **Exception:** if the JSON has changes that are not reviewed yet, the file is left alone and a notification says so. The asset stays in the JSON Sync tab until you choose Apply JSON or Overwrite JSON. |
+| Asset renamed | The JSON file moves with it. |
+| Asset deleted | The JSON file is deleted. |
 
-The console command `JsonBlueprintSync.Sync` reruns the start-up check, e.g. after a `git pull` with the editor open. Nothing
-happens during Play In Editor.
+The console command `JsonBlueprintSync.Sync` reruns the start-up check, e.g. after a `git pull` with the editor open. Nothing is
+checked during Play In Editor.
 
-Sync state is kept in `Saved/JsonBlueprintSync/cache.json`, which is local and should not be committed. It stores two hashes per
-Blueprint as of its last save. Files whose hash matches are skipped without loading the Blueprint.
+### The JSON Sync tab
+
+Open it from **Window > JSON Sync**, or with **Review** on a notification. The top list shows the assets whose JSON differs. Select
+one to see the keys that differ, with the JSON value, the asset value, and which side changed each key:
+
+- **JSON**: only the file changed. Ticked by default.
+- **Asset**: only the asset changed (e.g. you edited it but have not saved yet). Not ticked.
+- **Both**: both sides changed, or there is no record of what the asset was before, so the plugin cannot tell. Not ticked, and
+  highlighted. Decide these yourself.
+
+`(default)` means the key is not set on that side, so it has the archetype's value.
+
+Actions:
+
+- **Apply JSON** sets the ticked keys to the JSON value and keeps the asset's value for the rest. All the assets you apply are one
+  undo step. The assets are left modified and **never saved automatically**: save them to keep the changes, which also writes
+  their JSON. If you left keys unticked, that save writes the asset's values for them into the JSON.
+- **Overwrite JSON** writes the asset's current values to the JSON and discards the file's changes.
+- **Show in Content Browser** selects the asset. Double-clicking an asset opens its editor.
+- **Tick All** / **Tick None** set every key.
+
+Ticks are kept while the tab refreshes.
+
+### How the plugin tells which side changed
+
+When a changed JSON file is found, the plugin captures the asset's values at that moment and keeps them as the **base**
+(`Saved/JsonBlueprintSync/Base/`). A key is a JSON change if the asset still has the base value, an asset change if the file has the
+base value, and a conflict otherwise. There is no base, so every differing key shows as **Both**, when:
+
+- the asset had unsaved changes when the file changed, or
+- the plugin has never synced the asset before, or
+- the asset was saved while its JSON had unreviewed changes.
+
+### Local state
+
+Sync state is kept in `Saved/JsonBlueprintSync/`, which is local and should not be committed. `cache.json` stores, per asset, the
+hash of the JSON as of the last sync and whether the asset is waiting for review. Files whose hash matches are skipped without loading
+the asset. Deleting the folder is safe: on the next start every file is compared again, without a base.
 
 Applying a file in the editor does not compile the Blueprint, because compiling would break undo. The values survive the next
 compile, just like Details-panel edits. For Widget Blueprints, the Designer shows the new values straight away. A running game
@@ -131,15 +195,20 @@ uses the compiled widget tree, which Play In Editor brings up to date by compili
 
 ## Settings
 
-In the project's `Config/DefaultEditor.ini`:
+**Project Settings > Plugins > JSON Blueprint Sync**, stored in the project's `Config/DefaultEditor.ini` so the whole team shares
+them:
 
 ```ini
-[JsonBlueprintSync]
-; Folder for the JSON files, relative to the project folder. Default: JsonBlueprintSync
+[/Script/JsonBlueprintSync.JsonBlueprintSyncSettings]
+; Folder for the JSON files, relative to the project folder.
 JsonDir=JsonBlueprintSync
-; Set to False to turn off the automatic sync in the editor (the commandlet still works).
-bAutoSync=True
+; None, WriteJsonOnly or TwoWay. TwoWay is treated as WriteJsonOnly for Blueprints and Widget Blueprints.
+Blueprints=WriteJsonOnly
+WidgetBlueprints=WriteJsonOnly
+DataAssets=TwoWay
 ```
+
+Set every mode to None to turn the plugin off without disabling it.
 
 ## Commandlet
 
@@ -149,22 +218,25 @@ For command-line use and CI:
 UnrealEditor-Cmd.exe <Project>.uproject -run=JsonBlueprintSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]
 ```
 
-- `-export` writes JSON for every Blueprint under `-dir` (default `/Game`).
-- `-import` applies every JSON file under `-dir`, compiles the changed Blueprints, and saves them plus any child Blueprints the
-  values reached. `-nosave` skips saving.
-- `-verify` exits with an error if any JSON file differs from its Blueprint. Use it in CI to catch Blueprints that were changed
-  without re-exporting.
+- `-export` writes JSON for every synced asset under `-dir` (default `/Game`).
+- `-import` applies every JSON file under `-dir`, compiles the changed Blueprints, and saves them plus any child Blueprints and data
+  assets the values reached. It applies the whole file, whatever the mode, except for assets whose mode is None. `-nosave` skips
+  saving.
+- `-verify` exits with an error if any JSON file differs from its asset, is missing, or has no asset. Use it in CI to catch assets
+  that were changed without re-exporting.
 - `-jsondir` overrides the `JsonDir` setting.
+- Assets whose mode is None are skipped.
 
 In Git Bash, set `MSYS_NO_PATHCONV=1` so `/Game/...` arguments are not turned into Windows paths.
 
 ## Limitations
 
-- Only class defaults and Designer values are stored. Graph logic, functions and variables themselves are not. For Widget
-  Blueprints, the widget hierarchy, animations and property bindings are not stored either.
-- Only Blueprints under `/Game` are synced, not plugin content.
+- Only default values are stored. Graph logic, functions and variables themselves are not. For Widget Blueprints, the widget
+  hierarchy, animations and property bindings are not stored either.
+- Only assets under `/Game` are synced, not plugin content. Only a package's main asset is synced.
 - Only properties visible in the Details panel (`CPF_Edit`) are stored. Transient, deprecated, read-only (`EditConst`) and
-  instance-only properties are skipped, as are fixed-size C-style arrays.
+  instance-only properties are skipped, as are fixed-size C-style arrays. For data assets, properties that can only be edited on
+  the class defaults are skipped.
 - Instanced sub-objects (properties marked `Instanced` and their contents) are skipped.
 - Components created in C++ with `CreateDefaultSubobject` are captured but have not been tested yet.
 

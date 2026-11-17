@@ -2,24 +2,26 @@
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "Engine/Blueprint.h"
+#include "Engine/DataAsset.h"
+#include "FileHelpers.h"
 #include "JsonBlueprintSync.h"
 #include "JsonBlueprintSyncModule.h"
-#include "Engine/Blueprint.h"
-#include "FileHelpers.h"
-#include "HAL/FileManager.h"
+#include "JsonBlueprintSyncSettings.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "UObject/Package.h"
-#include "UObject/UObjectHash.h"
 #include "UObject/UObjectIterator.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(JsonBlueprintSyncCommandlet)
 
 namespace
 {
-	/** Blueprint package names under Dir, sorted. */
-	TArray<FString> FindBlueprintPackages(const FString& Dir)
+	using namespace JsonBlueprintSync;
+
+	/** Package names of the synced assets under Dir (Blueprints, Widget Blueprints, data assets; not those whose mode is None), sorted. */
+	TArray<FString> FindSyncedPackages(const FString& Dir)
 	{
 		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 		Registry.SearchAllAssets(true);
@@ -27,6 +29,7 @@ namespace
 
 		FARFilter Filter;
 		Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
+		Filter.ClassPaths.Add(UDataAsset::StaticClass()->GetClassPathName());
 		Filter.bRecursiveClasses = true;
 		Filter.PackagePaths.Add(FName(*Dir));
 		Filter.bRecursivePaths = true;
@@ -34,46 +37,44 @@ namespace
 		TArray<FAssetData> Assets;
 		Registry.GetAssets(Filter, Assets);
 
+		const UJsonBlueprintSyncSettings* Settings = GetDefault<UJsonBlueprintSyncSettings>();
 		TArray<FString> Packages;
 		for (const FAssetData& Asset : Assets)
 		{
-			Packages.AddUnique(Asset.PackageName.ToString());
+			// Only a package's main asset is synced.
+			if (Asset.AssetName.ToString() != FPackageName::GetShortName(Asset.PackageName))
+			{
+				continue;
+			}
+			if (Settings->GetMode(GetAssetKind(Asset)) != EJsonSyncMode::None)
+			{
+				Packages.AddUnique(Asset.PackageName.ToString());
+			}
 		}
 		Packages.Sort();
 		return Packages;
 	}
 
-	using JsonBlueprintSync::FindJsonFiles;
-	using JsonBlueprintSync::LoadBlueprint;
-
 	int32 RunExport(const FString& JsonRoot, const FString& Dir)
 	{
 		int32 Failures = 0;
 		int32 Written = 0;
-		const TArray<FString> Packages = FindBlueprintPackages(Dir);
+		const TArray<FString> Packages = FindSyncedPackages(Dir);
 		TSet<FString> Expected;
 		for (const FString& PackageName : Packages)
 		{
-			UBlueprint* Blueprint = LoadBlueprint(PackageName);
-			if (!Blueprint)
+			UObject* Asset = LoadAsset(PackageName);
+			if (!Asset)
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: cannot load the Blueprint"), *PackageName);
+				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: cannot load the asset"), *PackageName);
 				++Failures;
 				continue;
 			}
-			const FString Path = JsonBlueprintSync::GetJsonPath(JsonRoot, PackageName);
+			const FString Path = GetJsonPath(JsonRoot, PackageName);
 			Expected.Add(Path);
 
-			JsonBlueprintSync::FBlueprintDefaults Previous;
-			FString Error;
-			const bool bHasPrevious = JsonBlueprintSync::LoadFile(Path, Previous, Error);
-			if (!Error.IsEmpty())
-			{
-				UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: ignoring the existing file, %s"), *Path, *Error);
-			}
-
 			bool bWritten = false;
-			if (!JsonBlueprintSync::SaveFileIfChanged(Path, JsonBlueprintSync::Capture(Blueprint, bHasPrevious ? &Previous : nullptr), bWritten))
+			if (!SaveFileIfChanged(Path, Capture(Asset), bWritten))
 			{
 				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: cannot write the file"), *Path);
 				++Failures;
@@ -89,33 +90,33 @@ namespace
 		{
 			if (!Expected.Contains(File))
 			{
-				UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: no Blueprint for this file"), *File);
+				UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: no synced asset for this file"), *File);
 			}
 		}
-		UE_LOG(LogJsonBlueprintSync, Display, TEXT("Export: %d Blueprints, %d files written, %d failures"), Packages.Num(), Written, Failures);
+		UE_LOG(LogJsonBlueprintSync, Display, TEXT("Export: %d assets, %d files written, %d failures"), Packages.Num(), Written, Failures);
 		return Failures > 0 ? 1 : 0;
 	}
 
 	int32 RunVerify(const FString& JsonRoot, const FString& Dir)
 	{
 		int32 Failures = 0;
-		const TArray<FString> Packages = FindBlueprintPackages(Dir);
+		const TArray<FString> Packages = FindSyncedPackages(Dir);
 		TSet<FString> Expected;
 		for (const FString& PackageName : Packages)
 		{
-			const FString Path = JsonBlueprintSync::GetJsonPath(JsonRoot, PackageName);
+			const FString Path = GetJsonPath(JsonRoot, PackageName);
 			Expected.Add(Path);
 
-			UBlueprint* Blueprint = LoadBlueprint(PackageName);
-			if (!Blueprint)
+			UObject* Asset = LoadAsset(PackageName);
+			if (!Asset)
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: cannot load the Blueprint"), *PackageName);
+				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: cannot load the asset"), *PackageName);
 				++Failures;
 				continue;
 			}
-			JsonBlueprintSync::FBlueprintDefaults OnDisk;
+			FAssetDefaults OnDisk;
 			FString Error;
-			if (!JsonBlueprintSync::LoadFile(Path, OnDisk, Error))
+			if (!LoadFile(Path, OnDisk, Error))
 			{
 				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: %s"), *Path, Error.IsEmpty() ? TEXT("missing; run -export") : *Error);
 				++Failures;
@@ -123,8 +124,7 @@ namespace
 			}
 			FString Text;
 			FFileHelper::LoadFileToString(Text, *Path);
-			const FString Current = JsonBlueprintSync::ToJson(JsonBlueprintSync::Capture(Blueprint, &OnDisk));
-			if (!JsonBlueprintSync::NormalizeLineEndings(Text).Equals(Current, ESearchCase::CaseSensitive))
+			if (!NormalizeLineEndings(Text).Equals(ToJson(Capture(Asset)), ESearchCase::CaseSensitive))
 			{
 				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: differs from %s; run -export or -import"), *Path, *PackageName);
 				++Failures;
@@ -134,60 +134,66 @@ namespace
 		{
 			if (!Expected.Contains(File))
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: no Blueprint for this file"), *File);
+				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: no synced asset for this file"), *File);
 				++Failures;
 			}
 		}
-		UE_LOG(LogJsonBlueprintSync, Display, TEXT("Verify: %d Blueprints, %d failures"), Packages.Num(), Failures);
+		UE_LOG(LogJsonBlueprintSync, Display, TEXT("Verify: %d assets, %d failures"), Packages.Num(), Failures);
 		return Failures > 0 ? 1 : 0;
 	}
 
 	int32 RunImport(const FString& JsonRoot, const FString& Dir, bool bSave)
 	{
-		// Make sure the asset registry knows the Blueprints, so that loading resolves parents.
-		FindBlueprintPackages(Dir);
+		// Also makes sure the asset registry knows the assets, so that loading resolves parents.
+		const TSet<FString> Synced(FindSyncedPackages(Dir));
 
 		int32 Failures = 0;
 		struct FEntry
 		{
-			UBlueprint* Blueprint;
-			JsonBlueprintSync::FBlueprintDefaults Doc;
-			int32 Depth;
+			UObject* Asset;
+			FAssetDefaults Doc;
+			int32 Order;
 		};
 		TArray<FEntry> Entries;
 		for (const FString& File : FindJsonFiles(JsonRoot, Dir))
 		{
 			FString PackageName;
-			if (!JsonBlueprintSync::GetPackageName(JsonRoot, File, PackageName))
+			if (!GetPackageName(JsonRoot, File, PackageName))
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: not a valid Blueprint path"), *File);
+				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: not a valid asset path"), *File);
 				++Failures;
 				continue;
 			}
-			JsonBlueprintSync::FBlueprintDefaults Doc;
+			FAssetDefaults Doc;
 			FString Error;
-			if (!JsonBlueprintSync::LoadFile(File, Doc, Error))
+			if (!LoadFile(File, Doc, Error))
 			{
 				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: %s"), *File, *Error);
 				++Failures;
 				continue;
 			}
-			UBlueprint* Blueprint = FPackageName::DoesPackageExist(PackageName) ? LoadBlueprint(PackageName) : nullptr;
-			if (!Blueprint)
+			UObject* Asset = FPackageName::DoesPackageExist(PackageName) ? LoadAsset(PackageName) : nullptr;
+			if (!Asset)
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: no Blueprint %s"), *File, *PackageName);
+				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: no asset %s"), *File, *PackageName);
 				++Failures;
 				continue;
 			}
-			Entries.Add({ Blueprint, MoveTemp(Doc), JsonBlueprintSync::GetBlueprintDepth(Blueprint) });
+			if (!Synced.Contains(PackageName))
+			{
+				UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s: skipped; %s is not synced (its mode is None)"), *File, *PackageName);
+				continue;
+			}
+			Entries.Add({ Asset, MoveTemp(Doc), GetApplyOrder(Asset) });
 		}
-		Entries.StableSort([](const FEntry& A, const FEntry& B) { return A.Depth < B.Depth; });
+		// A child's values are a delta on its parent, and a data asset's on its class: parents go first.
+		Entries.StableSort([](const FEntry& A, const FEntry& B) { return A.Order < B.Order; });
 
 		int32 Changed = 0;
 		for (const FEntry& Entry : Entries)
 		{
-			const FString PackageName = Entry.Blueprint->GetPackage()->GetName();
-			const JsonBlueprintSync::FApplyResult Result = JsonBlueprintSync::Import(Entry.Blueprint, Entry.Doc);
+			const FString PackageName = Entry.Asset->GetPackage()->GetName();
+			const FApplyResult Result = Import(Entry.Asset, Entry.Doc);
 			for (const FString& Warning : Result.Warnings)
 			{
 				UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: %s"), *PackageName, *Warning);
@@ -210,15 +216,26 @@ namespace
 
 		if (bSave)
 		{
-			// Save every dirty Blueprint package: the imported ones and the child Blueprints the values propagated to.
+			// Save every dirty Blueprint and data asset package: the imported ones and the children the values propagated to.
 			TArray<UPackage*> Dirty;
-			for (TObjectIterator<UBlueprint> It; It; ++It)
+			const auto AddDirty = [&Dirty](const UObject* Object)
 			{
-				UPackage* Package = It->GetPackage();
+				UPackage* Package = Object->GetPackage();
 				if (Package && Package->IsDirty() && !Package->HasAnyPackageFlags(PKG_CompiledIn | PKG_InMemoryOnly)
 					&& !FPackageName::IsTempPackage(Package->GetName()))
 				{
 					Dirty.AddUnique(Package);
+				}
+			};
+			for (TObjectIterator<UBlueprint> It; It; ++It)
+			{
+				AddDirty(*It);
+			}
+			for (TObjectIterator<UDataAsset> It; It; ++It)
+			{
+				if (!It->HasAnyFlags(RF_ClassDefaultObject))
+				{
+					AddDirty(*It);
 				}
 			}
 			if (Dirty.Num() > 0 && !UEditorLoadingAndSavingUtils::SavePackages(Dirty, true))
@@ -228,7 +245,7 @@ namespace
 			}
 			UE_LOG(LogJsonBlueprintSync, Display, TEXT("Saved %d packages"), Dirty.Num());
 		}
-		UE_LOG(LogJsonBlueprintSync, Display, TEXT("Import: %d files, %d Blueprints changed, %d failures"), Entries.Num(), Changed, Failures);
+		UE_LOG(LogJsonBlueprintSync, Display, TEXT("Import: %d files, %d assets changed, %d failures"), Entries.Num(), Changed, Failures);
 		return Failures > 0 ? 1 : 0;
 	}
 }
@@ -240,7 +257,8 @@ UJsonBlueprintSyncCommandlet::UJsonBlueprintSyncCommandlet()
 	IsServer = false;
 	LogToConsole = true;
 	ShowErrorCount = true;
-	HelpDescription = TEXT("Syncs Blueprint class defaults with JSON files.");
+	HelpDescription = TEXT("Syncs Blueprint class defaults and data asset values with JSON files. -import applies every JSON file whatever the "
+		"asset's mode (Write JSON Only included); assets whose mode is None are skipped.");
 	HelpUsage = TEXT("-run=JsonBlueprintSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]");
 }
 
@@ -264,14 +282,14 @@ int32 UJsonBlueprintSyncCommandlet::Main(const FString& Params)
 		return 1;
 	}
 
-	FString JsonRoot = JsonBlueprintSync::GetDefaultJsonRoot();
+	FString JsonRoot = GetDefaultJsonRoot();
 	FString JsonDirOverride;
 	if (FParse::Value(*Params, TEXT("jsondir="), JsonDirOverride))
 	{
 		JsonRoot = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), JsonDirOverride);
 		FPaths::NormalizeDirectoryName(JsonRoot);
 	}
-	UE_LOG(LogJsonBlueprintSync, Display, TEXT("Blueprints under %s, JSON under %s"), *Dir, *JsonRoot);
+	UE_LOG(LogJsonBlueprintSync, Display, TEXT("Assets under %s, JSON under %s"), *Dir, *JsonRoot);
 
 	if (bExport)
 	{

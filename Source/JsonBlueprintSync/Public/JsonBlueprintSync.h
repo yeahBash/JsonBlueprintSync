@@ -2,27 +2,42 @@
 
 #include "CoreMinimal.h"
 
-class UBlueprint;
+class UObject;
+struct FAssetData;
 
 namespace JsonBlueprintSync
 {
-	/**
-	 * In-memory form of one Blueprint's defaults JSON file.
-	 *
-	 * Values are Unreal property text (the Details-panel copy/paste format), diffed against the archetype:
-	 * the parent class CDO for the Blueprint's own defaults, and the parent template for components.
-	 */
-	struct JSONBLUEPRINTSYNC_API FBlueprintDefaults
+	/** The kinds of asset that are synced. Each has its own mode in the project settings. */
+	enum class EAssetKind : uint8
 	{
-		static constexpr int32 SchemaVersion = 1;
+		/** Not synced. */
+		None,
+		/** Any Blueprint except Widget Blueprints: class defaults and component templates. */
+		Blueprint,
+		/** Widget Blueprint: class defaults and the Designer's widgets. */
+		WidgetBlueprint,
+		/** Instance of a UDataAsset subclass (native or Blueprint class): the asset's own properties. */
+		DataAsset,
+	};
+
+	/**
+	 * In-memory form of one asset's JSON file.
+	 *
+	 * Values are Unreal property text (the Details-panel copy/paste format), diffed against the archetype: the parent class CDO for a
+	 * Blueprint's own defaults, the parent template for components, the widget class CDO for widgets, and the asset's class CDO for a
+	 * data asset. The document is complete: a key that is missing means the archetype's value.
+	 */
+	struct JSONBLUEPRINTSYNC_API FAssetDefaults
+	{
+		static constexpr int32 SchemaVersion = 2;
 
 		/** Package name, e.g. /Game/Features/Light/BP_Lamp. */
-		FString Blueprint;
+		FString Asset;
 
-		/** Path of the parent class, e.g. /Script/Engine.Actor. */
+		/** Blueprints: path of the parent class, e.g. /Script/Engine.Actor. Data assets: path of the asset's class. */
 		FString Parent;
 
-		/** Property name -> value text, for the class default object. */
+		/** Property name -> value text: the class default object for a Blueprint, the asset itself for a data asset. */
 		TMap<FString, FString> Defaults;
 
 		/** Component name -> property name -> value text, for component templates. */
@@ -33,9 +48,6 @@ namespace JsonBlueprintSync
 		 * diffed against the widget class defaults. "<Widget>.Slot" holds the layout of the widget in its parent panel.
 		 */
 		TMap<FString, TMap<FString, FString>> Widgets;
-
-		/** Keys to reset to the archetype value: "Property", "Component.Property", "Widget.Property" or "Widget.Slot.Property". Sorted. */
-		TArray<FString> Reset;
 	};
 
 	struct JSONBLUEPRINTSYNC_API FApplyResult
@@ -49,7 +61,14 @@ namespace JsonBlueprintSync
 		bool HasErrors() const { return Errors.Num() > 0; }
 	};
 
-	/** JSON root folder: [JsonBlueprintSync] JsonDir in the editor ini, relative to the project dir. Defaults to JsonBlueprintSync. */
+	JSONBLUEPRINTSYNC_API EAssetKind GetAssetKind(const UObject* Asset);
+
+	/** Works without loading the asset, also for data assets whose class is a Blueprint. */
+	JSONBLUEPRINTSYNC_API EAssetKind GetAssetKind(const FAssetData& Asset);
+
+	JSONBLUEPRINTSYNC_API const TCHAR* LexToString(EAssetKind Kind);
+
+	/** JSON root folder: the JsonDir project setting, relative to the project dir. */
 	JSONBLUEPRINTSYNC_API FString GetDefaultJsonRoot();
 
 	/** /Game/A/BP_B -> <JsonRoot>/Game/A/BP_B.json */
@@ -58,43 +77,50 @@ namespace JsonBlueprintSync
 	/** Inverse of GetJsonPath. Returns false if the file is not under JsonRoot or is not a .json file. */
 	JSONBLUEPRINTSYNC_API bool GetPackageName(const FString& JsonRoot, const FString& JsonPath, FString& OutPackageName);
 
-	/**
-	 * Reads the Blueprint's current defaults.
-	 * Previous is the JSON as last written. Keys it listed that no longer differ go into Reset, so that the reset reaches other machines.
-	 */
-	JSONBLUEPRINTSYNC_API FBlueprintDefaults Capture(UBlueprint* Blueprint, const FBlueprintDefaults* Previous = nullptr);
+	/** Reads the asset's current values. The asset must be of a synced kind. */
+	JSONBLUEPRINTSYNC_API FAssetDefaults Capture(UObject* Asset);
 
 	/** Deterministic JSON: fixed top-level order, sorted keys, two-space indent, LF line endings, trailing newline. */
-	JSONBLUEPRINTSYNC_API FString ToJson(const FBlueprintDefaults& Doc);
+	JSONBLUEPRINTSYNC_API FString ToJson(const FAssetDefaults& Doc);
 
-	JSONBLUEPRINTSYNC_API bool FromJson(const FString& Json, FBlueprintDefaults& OutDoc, FString& OutError);
+	JSONBLUEPRINTSYNC_API bool FromJson(const FString& Json, FAssetDefaults& OutDoc, FString& OutError);
+
+	/** Key -> value for every value in the document: "Property", "Component.Property", "Widget.Property", "Widget.Slot.Property". */
+	JSONBLUEPRINTSYNC_API TMap<FString, FString> Flatten(const FAssetDefaults& Doc);
+
+	/** True if both documents hold the same values (the Asset and Parent fields are not compared). */
+	JSONBLUEPRINTSYNC_API bool ValuesEqual(const FAssetDefaults& A, const FAssetDefaults& B);
 
 	/**
-	 * Writes the document's values into the Blueprint's CDO and component templates. Keys missing from the document are left untouched.
-	 * All values are validated first; on any error nothing is written. Each changed value is also copied to archetype instances that
-	 * were inheriting it (child Blueprint CDOs and loaded instances). Does not compile or save. Wrap in an FScopedTransaction in the editor.
+	 * Makes the asset's values match the document: keys in the document are set, values the asset overrides that the document does not
+	 * list are reset to the archetype. All values are validated first; on any error nothing is written. Each changed value is also copied
+	 * to archetype instances that were inheriting it (child Blueprint CDOs, data assets of a Blueprint class, loaded instances).
+	 * Does not compile, mark modified or save. Wrap in an FScopedTransaction in the editor.
 	 */
-	JSONBLUEPRINTSYNC_API FApplyResult Apply(UBlueprint* Blueprint, const FBlueprintDefaults& Doc);
+	JSONBLUEPRINTSYNC_API FApplyResult Apply(UObject* Asset, const FAssetDefaults& Doc);
 
-	/** Apply, then mark the Blueprint modified and compile it if anything changed. Never saves. */
-	JSONBLUEPRINTSYNC_API FApplyResult Import(UBlueprint* Blueprint, const FBlueprintDefaults& Doc);
+	/** Apply, then MarkModified and, for Blueprints, compile if anything changed. Never saves. */
+	JSONBLUEPRINTSYNC_API FApplyResult Import(UObject* Asset, const FAssetDefaults& Doc);
 
-	/** Number of Blueprint classes above this one. Import parents (lower depth) before children. */
-	JSONBLUEPRINTSYNC_API int32 GetBlueprintDepth(const UBlueprint* Blueprint);
+	/** Blueprints: MarkBlueprintAsModified. Data assets: marks the package dirty. */
+	JSONBLUEPRINTSYNC_API void MarkModified(UObject* Asset);
+
+	/** Apply in ascending order: parent Blueprints before children, Blueprints before data assets (whose class may be one of them). */
+	JSONBLUEPRINTSYNC_API int32 GetApplyOrder(const UObject* Asset);
 
 	JSONBLUEPRINTSYNC_API FString NormalizeLineEndings(const FString& Text);
 
 	/** Loads and parses a JSON file. Returns false if it is missing or invalid (OutError is empty if it is missing). */
-	JSONBLUEPRINTSYNC_API bool LoadFile(const FString& Path, FBlueprintDefaults& OutDoc, FString& OutError);
+	JSONBLUEPRINTSYNC_API bool LoadFile(const FString& Path, FAssetDefaults& OutDoc, FString& OutError);
 
 	/** Writes ToJson(Doc) as UTF-8 without BOM, only if it differs from the file (ignoring line endings). Returns false on write failure. */
-	JSONBLUEPRINTSYNC_API bool SaveFileIfChanged(const FString& Path, const FBlueprintDefaults& Doc, bool& bOutWritten);
+	JSONBLUEPRINTSYNC_API bool SaveFileIfChanged(const FString& Path, const FAssetDefaults& Doc, bool& bOutWritten);
 
 	/** JSON files under the folder that mirrors Dir (e.g. /Game), as normalized paths, sorted. */
 	JSONBLUEPRINTSYNC_API TArray<FString> FindJsonFiles(const FString& JsonRoot, const FString& Dir);
 
-	/** Loads the Blueprint asset of a package such as /Game/A/BP_B. */
-	JSONBLUEPRINTSYNC_API UBlueprint* LoadBlueprint(const FString& PackageName);
+	/** Loads the main asset of a package such as /Game/A/BP_B. */
+	JSONBLUEPRINTSYNC_API UObject* LoadAsset(const FString& PackageName);
 
 	/** MD5 of the UTF-8 text with normalized line endings. */
 	JSONBLUEPRINTSYNC_API FString HashText(const FString& Text);

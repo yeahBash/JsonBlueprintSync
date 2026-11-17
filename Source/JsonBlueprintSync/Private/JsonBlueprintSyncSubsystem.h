@@ -9,20 +9,19 @@
 #include "JsonBlueprintSyncSubsystem.generated.h"
 
 class SNotificationItem;
-class UBlueprint;
 class UPackage;
 class FObjectPostSaveContext;
 struct FAssetData;
 
 /**
- * Keeps the Blueprint defaults JSON files in sync while the editor runs (see the plugin README.md):
- * - On save of a Blueprint under /Game, exports its defaults (the asset wins).
- * - When the asset registry has finished loading, imports JSON files that changed since the last sync (the JSON wins),
- *   unless the Blueprint changed too, in which case a notification lets the user pick. Imported Blueprints are left dirty, never saved.
- * - Moves the JSON file when a Blueprint is renamed and deletes it when the Blueprint is deleted.
+ * Keeps the JSON files in sync with the assets while the editor runs (see the plugin README.md):
+ * - Saving an asset writes its JSON, unless the JSON has changes that are not reviewed yet (then the asset is "pending").
+ * - When the asset registry has finished loading, finds JSON files that changed since the last sync and differ from their asset.
+ *   They are listed in the JSON Sync tab. Data assets in Two Way mode get the JSON applied automatically when nothing conflicts.
+ * - Moves the JSON file when an asset is renamed and deletes it when the asset is deleted.
  *
- * Not created in commandlets (use -run=JsonBlueprintSync there) or when [JsonBlueprintSync] bAutoSync=False in the editor ini.
- * Console command JsonBlueprintSync.Sync reruns the import check, e.g. after a git pull with the editor open.
+ * Not created in commandlets (use -run=JsonBlueprintSync there). Console command JsonBlueprintSync.Sync reruns the check,
+ * e.g. after a git pull with the editor open.
  */
 UCLASS()
 class UJsonBlueprintSyncSubsystem : public UEditorSubsystem
@@ -30,31 +29,80 @@ class UJsonBlueprintSyncSubsystem : public UEditorSubsystem
 	GENERATED_BODY()
 
 public:
+	/** A pending asset as the JSON Sync tab shows it. */
+	struct FPendingView
+	{
+		FString PackageName;
+		JsonBlueprintSync::EAssetKind Kind = JsonBlueprintSync::EAssetKind::None;
+		/** Set if the JSON cannot be read or the asset cannot be loaded; then only Overwrite JSON is possible. */
+		FString Error;
+		/** Keys that differ between the JSON and the asset now. */
+		TArray<JsonBlueprintSync::FKeyDiff> Keys;
+		/** False if it is unknown which side changed what (every key is then a conflict). */
+		bool bHasBase = false;
+	};
+
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
-	/** Imports JSON files that changed since the last sync; reports matches, imports and conflicts. */
+	/** Finds JSON files that changed since the last sync and differ from their asset; applies Two Way ones that do not conflict. */
 	void SyncFromJson();
 
-	/** Writes the Blueprint's JSON file and records the sync. Returns false if the file cannot be written. */
-	bool ExportBlueprint(UBlueprint* Blueprint);
+	/** Pending package names, sorted. */
+	TArray<FString> GetPendingPackages() const;
+
+	/** Compares the pending asset with its JSON now. Returns false if the package is not pending. */
+	bool GetPendingView(const FString& PackageName, FPendingView& OutView) const;
+
+	/**
+	 * Sets the given keys to their JSON values (one undo step; not saved). Keys that are not given keep the asset's value, and saving
+	 * the asset writes them to the JSON. Resolves the pending state.
+	 */
+	bool ApplyJson(const FString& PackageName, const TArray<FString>& Keys);
+
+	/** Writes the asset's current values to its JSON file, discarding the JSON's changes. Resolves the pending state. */
+	bool OverwriteJson(const FString& PackageName);
+
+	/** Broadcast when the pending list changes. */
+	FSimpleMulticastDelegate OnPendingChanged;
 
 	/** Shows a toast and logs it. */
 	static void Notify(const FText& Text, bool bError);
 
+	/** Opens the JSON Sync tab. */
+	static void OpenSyncTab();
+
 private:
-	struct FPendingImport
+	struct FPending
 	{
-		TWeakObjectPtr<UBlueprint> Blueprint;
-		JsonBlueprintSync::FBlueprintDefaults Doc;
+		JsonBlueprintSync::EAssetKind Kind = JsonBlueprintSync::EAssetKind::None;
+		/** Unset if the file cannot be parsed. */
+		TOptional<JsonBlueprintSync::FAssetDefaults> File;
+		FString Error;
+		/** The asset as it was when the JSON change was detected. Unset if unknown. */
+		TOptional<JsonBlueprintSync::FAssetDefaults> Base;
 	};
 
-	/** Applies all documents in one transaction (parents first), then compiles the changed Blueprints. Never saves. */
-	void ImportDocuments(TArray<FPendingImport> Imports);
+	/** Compares one changed JSON file with its asset and records it as matching or pending. Returns true if it became pending. */
+	bool Detect(const FString& PackageName, const FString& Text, const FString& FileHash, JsonBlueprintSync::EAssetKind Kind);
 
-	void ShowConflict(UBlueprint* Blueprint, const TArray<FString>& Keys);
-	void ResolveConflict(const FString& PackageName, bool bUseJson);
+	/** Applies the keys to each asset (Blueprints first, parents before children) in one transaction. Returns the resolved packages. */
+	TArray<FString> ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, bool bNotify);
+
+	/** Clears the pending state after the user (or Two Way) picked the values. */
+	void Resolve(const FString& PackageName, UObject* Asset);
+
+	/** Writes the asset's JSON file and, if the asset is saved, records the sync. Returns false if the file cannot be written. */
+	bool WriteJson(UObject* Asset);
+
+	void MarkPending(const FString& PackageName, FPending&& State);
+	void ShowPendingNotification();
+	void NotifySaveSkipped(const FString& PackageName);
+
+	/** The synced kind of the asset, or None if its kind is not synced or its mode is None. */
+	JsonBlueprintSync::EAssetKind GetSyncedKind(const FAssetData& Asset) const;
+	JsonBlueprintSync::EAssetKind GetSyncedKind(const UObject* Asset) const;
 
 	void OnFilesLoaded();
 	void OnPackageSaved(const FString& PackageFileName, UPackage* Package, FObjectPostSaveContext Context);
@@ -62,18 +110,23 @@ private:
 	void OnAssetRemoved(const FAssetData& Asset);
 	bool ProcessRemovals(float DeltaTime);
 
+	FString GetJsonRoot() const;
 	FString GetJsonPath(const FString& PackageName) const;
 	void SaveCache() const;
 
-	FString JsonRoot;
 	JsonBlueprintSync::FSyncCache Cache;
 
-	/** Blueprint packages reported removed; checked on the next tick, once the delete or rename has finished. */
+	/** Assets whose JSON has changes waiting for the user. Mirrors the pending entries of the cache. */
+	TMap<FString, FPending> Pending;
+
+	/** Assets resolved in this session but not saved since. Their next save writes the JSON even though the file changed. */
+	TSet<FString> Resolved;
+
+	/** Packages reported removed; checked on the next tick, once the delete or rename has finished. */
 	TSet<FString> PendingRemovals;
 	FTSTicker::FDelegateHandle RemovalTicker;
 
-	/** Packages with a conflict notification on screen. */
-	TMap<FString, TWeakPtr<SNotificationItem>> OpenConflicts;
+	TWeakPtr<SNotificationItem> PendingNotification;
 
 	FDelegateHandle FilesLoadedHandle;
 	FDelegateHandle PackageSavedHandle;

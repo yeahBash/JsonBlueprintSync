@@ -1,6 +1,6 @@
 using UnrealBuildTool;
 
-// Editor-only module: syncs Blueprint class-default overrides with JSON files.
+// Editor-only module: syncs Blueprint class defaults and data asset values with JSON files.
 // See README.md in the plugin folder.
 public class JsonBlueprintSync : ModuleRules
 {
@@ -8,7 +8,8 @@ public class JsonBlueprintSync : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });
+		// DeveloperSettings: the public settings header derives from UDeveloperSettings.
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "DeveloperSettings" });
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
@@ -19,10 +20,11 @@ public class JsonBlueprintSync : ModuleRules
 			"AssetRegistry",
 			"Json",
 			"JsonUtilities",
-			"DirectoryWatcher",
 			"EditorSubsystem",
 			"Slate",
 			"SlateCore",
+			"InputCore",
+			"WorkspaceMenuStructure",
 			"UMG",
 			// Only the tests use it, to build Widget Blueprints; the library reads them through UnrealEd's UBaseWidgetBlueprint.
 			"UMGEditor",

@@ -4,57 +4,85 @@
 
 namespace JsonBlueprintSync
 {
-	struct FBlueprintDefaults;
+	struct FAssetDefaults;
 
-	/** Hashes (HashText) recorded the last time a Blueprint and its JSON file were known to match. */
+	/** What the editor knows about one asset's JSON file. */
 	struct FSyncEntry
 	{
-		/** The JSON file's text. */
+		/** HashText of the JSON file the last time it matched the saved asset. Empty if that never happened on this machine. */
 		FString JsonHash;
 
-		/** ToJson(Capture(Blueprint)) without a previous document, so it does not depend on the file's reset list. */
-		FString AssetHash;
+		/** The file has changes waiting in the JSON Sync tab. Saving the asset does not write its JSON until they are resolved. */
+		bool bPending = false;
 	};
 
-	enum class ESyncAction : uint8
+	/** Which side changed a key that differs between the JSON file and the asset. */
+	enum class EKeyChange : uint8
 	{
-		/** The file has not changed since the last sync. */
-		None,
-		/** The file matches the asset (a teammate committed both). Record the new hashes. */
-		UpdateCache,
-		/** Only the file changed: the JSON wins. */
-		Import,
-		/** Both changed and they disagree, or they disagree and there is no record. The user picks. */
-		Conflict,
+		/** The asset still has the base value: the JSON changed it. Applied by default. */
+		Json,
+		/** The JSON still has the base value: the asset changed it. Kept by default; saving the asset writes it to the JSON. */
+		Asset,
+		/** Both changed it, or there is no base to tell. Kept by default and highlighted. */
+		Both,
+	};
+
+	struct FKeyDiff
+	{
+		/** "Property", "Component.Property", "Widget.Property" or "Widget.Slot.Property". */
+		FString Key;
+		/** Unset if the key is not in the JSON: the archetype value. */
+		TOptional<FString> JsonValue;
+		/** Unset if the asset does not override the key: the archetype value. */
+		TOptional<FString> AssetValue;
+		EKeyChange Change = EKeyChange::Both;
+
+		/** Whether the key is ticked (taken from the JSON) by default. */
+		bool TakeJsonByDefault() const { return Change == EKeyChange::Json; }
 	};
 
 	/**
-	 * Which side wins for one JSON file.
-	 * Entry: the last sync, or null. FileHash: the file on disk. CurrentHash: ToJson(Capture(Blueprint, &FileDoc)).
-	 * AssetHash: as in FSyncEntry, for the asset now.
+	 * Keys whose value differs between the JSON file and the asset, sorted, each with the side that changed it.
+	 * Base is the asset as it was when the JSON change was detected; null if that is unknown.
 	 */
-	ESyncAction Classify(const FSyncEntry* Entry, const FString& FileHash, const FString& CurrentHash, const FString& AssetHash);
+	TArray<FKeyDiff> DiffKeys(const FAssetDefaults* Base, const FAssetDefaults& File, const FAssetDefaults& Current);
 
-	/** Keys that differ between two documents: "Property", "Component.Property" or "parent". Sorted. */
-	TArray<FString> DiffKeys(const FBlueprintDefaults& A, const FBlueprintDefaults& B);
+	/** Current with the given keys taken from Source. A key that Source does not list is removed, i.e. reset to the archetype. */
+	FAssetDefaults TakeKeys(const FAssetDefaults& Current, const FAssetDefaults& Source, const TArray<FString>& Keys);
 
-	/** Local record of the last sync per Blueprint package. Lives in Saved/, never committed. */
+	/**
+	 * Local sync state per package, plus the base documents of pending assets. Lives in Saved/, never committed.
+	 *   <Dir>/cache.json             package -> FSyncEntry
+	 *   <Dir>/Base/<Package>.json    the asset as it was when its pending JSON change was detected
+	 */
 	class FSyncCache
 	{
 	public:
-		/** <ProjectSavedDir>/JsonBlueprintSync/cache.json */
-		static FString GetDefaultPath();
+		/** <ProjectSavedDir>/JsonBlueprintSync */
+		static FString GetDefaultDir();
 
-		/** A missing file gives an empty cache. Returns false if the file exists but cannot be read; the cache is then empty. */
-		bool Load(const FString& Path);
-		bool Save(const FString& Path) const;
+		/**
+		 * Reads <Dir>/cache.json. A missing file, or one from an older version of the plugin, gives an empty cache.
+		 * Returns false if the file exists but cannot be read; the cache is then empty.
+		 */
+		bool Load(const FString& InDir);
+		bool Save() const;
 
 		const FSyncEntry* Find(const FString& PackageName) const { return Entries.Find(PackageName); }
 		void Set(const FString& PackageName, const FSyncEntry& Entry) { Entries.Add(PackageName, Entry); }
-		void Remove(const FString& PackageName) { Entries.Remove(PackageName); }
+		/** Removes the entry and its base document. */
+		void Remove(const FString& PackageName);
 		int32 Num() const { return Entries.Num(); }
+		TArray<FString> GetPendingPackages() const;
+
+		bool SaveBase(const FString& PackageName, const FAssetDefaults& Base) const;
+		bool LoadBase(const FString& PackageName, FAssetDefaults& OutBase) const;
+		void DeleteBase(const FString& PackageName) const;
 
 	private:
+		FString GetBasePath(const FString& PackageName) const;
+
+		FString Dir;
 		TMap<FString, FSyncEntry> Entries;
 	};
 }
