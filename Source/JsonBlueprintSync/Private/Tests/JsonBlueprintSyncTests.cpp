@@ -536,8 +536,8 @@ bool FJsonBlueprintSyncCacheTest::RunTest(const FString&)
 
 	FSyncCache Cache;
 	TestTrue(TEXT("Missing cache loads empty"), Cache.Load(Dir) && Cache.Num() == 0);
-	Cache.Set(TEXT("/Game/B"), { TEXT("j2"), true });
-	Cache.Set(TEXT("/Game/A"), { TEXT("j1"), false });
+	Cache.Set(TEXT("/Game/B"), { TEXT("j2"), FString(), true });
+	Cache.Set(TEXT("/Game/A"), { TEXT("j1"), TEXT("a1"), false });
 	FAssetDefaults Base;
 	Base.Asset = TEXT("/Game/B");
 	Base.Defaults.Add(TEXT("Speed"), TEXT("1.0"));
@@ -548,7 +548,8 @@ bool FJsonBlueprintSyncCacheTest::RunTest(const FString&)
 	TestTrue(TEXT("Cache loads"), Loaded.Load(Dir));
 	const FSyncEntry* A = Loaded.Find(TEXT("/Game/A"));
 	const FSyncEntry* B = Loaded.Find(TEXT("/Game/B"));
-	TestTrue(TEXT("Cache round trip"), Loaded.Num() == 2 && A && A->JsonHash == TEXT("j1") && !A->bPending && B && B->bPending);
+	TestTrue(TEXT("Cache round trip"), Loaded.Num() == 2 && A && A->JsonHash == TEXT("j1") && A->AssetHash == TEXT("a1") && !A->bPending
+		&& B && B->bPending && B->AssetHash.IsEmpty());
 	TestEqual(TEXT("Pending packages"), FString::Join(Loaded.GetPendingPackages(), TEXT(",")), FString(TEXT("/Game/B")));
 	FAssetDefaults LoadedBase;
 	TestTrue(TEXT("Base loads"), Loaded.LoadBase(TEXT("/Game/B"), LoadedBase) && ValuesEqual(LoadedBase, Base));
@@ -562,6 +563,71 @@ bool FJsonBlueprintSyncCacheTest::RunTest(const FString&)
 	TestFalse(TEXT("Broken cache reports failure"), Loaded.Load(Dir));
 	TestEqual(TEXT("Broken cache is empty"), Loaded.Num(), 0);
 	IFileManager::Get().DeleteDirectory(*Dir, false, true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncBaseChoiceTest, "JsonBlueprintSync.BaseChoice", TestFlags)
+bool FJsonBlueprintSyncBaseChoiceTest::RunTest(const FString&)
+{
+	// Which side changed what, from the hashes recorded at the last sync.
+	FBaseInputs JsonOnly;
+	JsonOnly.bHasEntry = true;
+	TestTrue(TEXT("JSON changed, asset not: base is the asset"), ChooseBase(JsonOnly) == EBaseSource::Current);
+
+	FBaseInputs Pending = JsonOnly;
+	Pending.bPending = true;
+	Pending.bAssetChanged = true;
+	TestTrue(TEXT("Already pending: stored base"), ChooseBase(Pending) == EBaseSource::Stored);
+
+	FBaseInputs Unknown;
+	TestTrue(TEXT("Never synced: no base"), ChooseBase(Unknown) == EBaseSource::None);
+
+	FBaseInputs AssetOnly = JsonOnly;
+	AssetOnly.bJsonChanged = false;
+	AssetOnly.bAssetChanged = true;
+	TestTrue(TEXT("Asset changed, JSON not: base is the file (JSON out of date)"), ChooseBase(AssetOnly) == EBaseSource::File);
+	AssetOnly.bAssetDirty = true;
+	AssetOnly.bParentDiffers = true;
+	TestTrue(TEXT("Unchanged JSON is the base even if the asset is dirty or reparented"), ChooseBase(AssetOnly) == EBaseSource::File);
+
+	FBaseInputs BothChanged = JsonOnly;
+	BothChanged.bAssetChanged = true;
+	TestTrue(TEXT("Both changed: no base"), ChooseBase(BothChanged) == EBaseSource::None);
+	FBaseInputs Dirty = JsonOnly;
+	Dirty.bAssetDirty = true;
+	TestTrue(TEXT("JSON changed, unsaved edits: no base"), ChooseBase(Dirty) == EBaseSource::None);
+	FBaseInputs Reparented = JsonOnly;
+	Reparented.bParentDiffers = true;
+	TestTrue(TEXT("JSON changed, other parent: no base"), ChooseBase(Reparented) == EBaseSource::None);
+
+	// Two Way applies on its own only when the JSON changed something and nothing is in doubt.
+	auto MakeDiff = [](const TCHAR* Key, EKeyChange Change)
+	{
+		FKeyDiff Diff;
+		Diff.Key = Key;
+		Diff.Change = Change;
+		return Diff;
+	};
+	const TArray<FKeyDiff> JsonKeys = { MakeDiff(TEXT("A"), EKeyChange::Json), MakeDiff(TEXT("B"), EKeyChange::Asset) };
+	const TArray<FKeyDiff> AssetKeys = { MakeDiff(TEXT("B"), EKeyChange::Asset) };
+	const TArray<FKeyDiff> Conflict = { MakeDiff(TEXT("A"), EKeyChange::Json), MakeDiff(TEXT("C"), EKeyChange::Both) };
+	TestTrue(TEXT("Auto-apply JSON keys"), CanAutoApply(true, false, JsonKeys));
+	TestFalse(TEXT("No auto-apply without a base"), CanAutoApply(false, false, JsonKeys));
+	TestFalse(TEXT("No auto-apply with another parent"), CanAutoApply(true, true, JsonKeys));
+	TestFalse(TEXT("No auto-apply with a conflict"), CanAutoApply(true, false, Conflict));
+	TestFalse(TEXT("No auto-apply of an out-of-date JSON"), CanAutoApply(true, false, AssetKeys));
+	TestFalse(TEXT("No auto-apply without keys"), CanAutoApply(true, false, {}));
+
+	// A JSON that is only out of date: with the file as base, every difference is an asset change and nothing is ticked.
+	FAssetDefaults File;
+	File.Defaults.Add(TEXT("Speed"), TEXT("1.0"));
+	File.Defaults.Add(TEXT("Removed"), TEXT("2"));
+	FAssetDefaults Current;
+	Current.Defaults.Add(TEXT("Speed"), TEXT("5.0"));
+	Current.Defaults.Add(TEXT("Added"), TEXT("3"));
+	const TArray<FKeyDiff> Diffs = DiffKeys(&File, File, Current);
+	TestEqual(TEXT("Out-of-date keys"), JoinKeys(Diffs), FString(TEXT("Added,Removed,Speed")));
+	TestFalse(TEXT("Every key changed in the asset"), Diffs.ContainsByPredicate([](const FKeyDiff& Diff) { return Diff.Change != EKeyChange::Asset || Diff.TakeJsonByDefault(); }));
 	return true;
 }
 

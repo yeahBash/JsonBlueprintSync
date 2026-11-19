@@ -12,6 +12,12 @@ namespace JsonBlueprintSync
 		/** HashText of the JSON file the last time it matched the saved asset. Empty if that never happened on this machine. */
 		FString JsonHash;
 
+		/**
+		 * The package's saved hash (UPackage::GetSavedHash) at that time, so that a .uasset that changed without its JSON (e.g.
+		 * committed alone) is noticed without loading every asset. Empty if unknown, e.g. in a cache from an older plugin version.
+		 */
+		FString AssetHash;
+
 		/** The file has changes waiting in the JSON Sync tab. Saving the asset does not write its JSON until they are resolved. */
 		bool bPending = false;
 	};
@@ -46,6 +52,42 @@ namespace JsonBlueprintSync
 	 * Base is the asset as it was when the JSON change was detected; null if that is unknown.
 	 */
 	TArray<FKeyDiff> DiffKeys(const FAssetDefaults* Base, const FAssetDefaults& File, const FAssetDefaults& Current);
+
+	/** Where the base of a newly detected difference comes from. */
+	enum class EBaseSource : uint8
+	{
+		/** Unknown which side changed what: every key is a conflict. */
+		None,
+		/** Already pending: keep the base stored when the difference was first seen. */
+		Stored,
+		/** The JSON file, which is unchanged since the last sync: the asset made every change. */
+		File,
+		/** The asset as it is now, which is unchanged since the last sync: the JSON made every change. */
+		Current,
+	};
+
+	struct FBaseInputs
+	{
+		bool bPending = false;
+		/** The asset was synced on this machine before. */
+		bool bHasEntry = false;
+		/** The JSON's hash differs from the one recorded at the last sync. */
+		bool bJsonChanged = true;
+		/** The package's saved hash differs from the one recorded at the last sync (false if unknown). */
+		bool bAssetChanged = false;
+		/** The asset has unsaved edits. */
+		bool bAssetDirty = false;
+		/** The JSON names a different parent than the asset has, so its values are relative to another archetype. */
+		bool bParentDiffers = false;
+	};
+
+	EBaseSource ChooseBase(const FBaseInputs& In);
+
+	/**
+	 * Whether Two Way may apply the JSON without asking: the base is known, the parents agree, no key conflicts, and the JSON
+	 * changed at least one key. A JSON that is only out of date (every key changed in the asset) is left for the user.
+	 */
+	bool CanAutoApply(bool bHasBase, bool bParentDiffers, const TArray<FKeyDiff>& Keys);
 
 	/** Current with the given keys taken from Source. A key that Source does not list is removed, i.e. reset to the archetype. */
 	FAssetDefaults TakeKeys(const FAssetDefaults& Current, const FAssetDefaults& Source, const TArray<FString>& Keys);

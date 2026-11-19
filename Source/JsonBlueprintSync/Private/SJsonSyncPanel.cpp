@@ -390,6 +390,15 @@ void SJsonSyncPanel::Refresh()
 				Item->Status = LOCTEXT("StatusError", "Cannot read the JSON");
 				Item->bProblem = true;
 			}
+			else if (View.ParentDiffers())
+			{
+				Item->Status = FText::Format(LOCTEXT("StatusParent", "{0} keys, parent differs"), FText::AsNumber(View.Keys.Num()));
+				Item->bProblem = true;
+			}
+			else if (View.IsJsonOutOfDate())
+			{
+				Item->Status = FText::Format(LOCTEXT("StatusOutOfDate", "{0} keys, JSON out of date"), FText::AsNumber(View.Keys.Num()));
+			}
 			else if (View.Keys.ContainsByPredicate([](const FKeyDiff& Diff) { return Diff.Change == EKeyChange::Both; }))
 			{
 				Item->Status = FText::Format(LOCTEXT("StatusConflict", "{0} keys, conflicts"), FText::AsNumber(View.Keys.Num()));
@@ -432,6 +441,9 @@ void SJsonSyncPanel::RefreshKeys()
 	KeyItems.Reset();
 	SelectedError.Reset();
 	bSelectedHasBase = false;
+	bSelectedOutOfDate = false;
+	SelectedJsonParent.Reset();
+	SelectedAssetParent.Reset();
 
 	UJsonBlueprintSyncSubsystem::FPendingView View;
 	UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get();
@@ -439,6 +451,9 @@ void SJsonSyncPanel::RefreshKeys()
 	{
 		SelectedError = View.Error;
 		bSelectedHasBase = View.bHasBase;
+		bSelectedOutOfDate = View.IsJsonOutOfDate();
+		SelectedJsonParent = View.JsonParent;
+		SelectedAssetParent = View.AssetParent;
 		for (const FKeyDiff& Diff : View.Keys)
 		{
 			const TSharedPtr<FKeyItem> Item = MakeShared<FKeyItem>();
@@ -505,7 +520,7 @@ FText SJsonSyncPanel::GetSummaryText() const
 	{
 		return LOCTEXT("NothingPending", "Every synced asset matches its JSON file.");
 	}
-	return FText::Format(LOCTEXT("Summary", "{0} asset(s) differ from their JSON file. Saving one of them does not write its JSON until you apply or overwrite it."),
+	return FText::Format(LOCTEXT("Summary", "{0} asset(s) differ from their JSON file. Saving one of them does not write its JSON until you apply or overwrite it, unless the JSON is only out of date."),
 		FText::AsNumber(AssetItems.Num()));
 }
 
@@ -520,9 +535,19 @@ FText SJsonSyncPanel::GetDetailText() const
 		return FText::Format(LOCTEXT("DetailError", "{0}\nThe JSON cannot be applied: {1}\nFix the file and press Refresh, or overwrite it with the asset's values."),
 			FText::FromString(SelectedPackage), FText::FromString(SelectedError));
 	}
+	if (!SelectedJsonParent.IsEmpty())
+	{
+		return FText::Format(LOCTEXT("DetailParent", "{0}\nThe JSON was written for parent {1}, but the asset's parent is {2} (it was reparented, or one side is out of date). The JSON's values were relative to the old parent, so keys it does not list may differ as well. Usually: Overwrite JSON. Ticked keys take the JSON value."),
+			FText::FromString(SelectedPackage), FText::FromString(SelectedJsonParent), FText::FromString(SelectedAssetParent));
+	}
+	if (bSelectedOutOfDate)
+	{
+		return FText::Format(LOCTEXT("DetailOutOfDate", "{0}\nThe JSON has no changes of its own: the asset changed since its JSON was written (e.g. the .uasset was committed without it). Saving the asset or Overwrite JSON updates the JSON. Ticking a key reverts the asset's change."),
+			FText::FromString(SelectedPackage));
+	}
 	if (!bSelectedHasBase)
 	{
-		return FText::Format(LOCTEXT("DetailNoBase", "{0}\nThe asset was edited before this JSON change was seen, so every key is marked as a conflict. Tick the keys to take from the JSON."),
+		return FText::Format(LOCTEXT("DetailNoBase", "{0}\nIt is unknown which side changed each key (both the JSON and the asset changed since the last sync, or the asset was never synced on this machine), so every key is marked as a conflict. Tick the keys to take from the JSON."),
 			FText::FromString(SelectedPackage));
 	}
 	return FText::Format(LOCTEXT("Detail", "{0}\nTicked keys take the JSON value. Unticked keys keep the asset's value."), FText::FromString(SelectedPackage));

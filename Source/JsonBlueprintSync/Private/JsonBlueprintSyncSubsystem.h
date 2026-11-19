@@ -40,6 +40,17 @@ public:
 		TArray<JsonBlueprintSync::FKeyDiff> Keys;
 		/** False if it is unknown which side changed what (every key is then a conflict). */
 		bool bHasBase = false;
+		/**
+		 * Set if the JSON names a different parent (Blueprints) or class (data assets) than the asset has, e.g. after a reparent.
+		 * The JSON's values are then relative to another archetype, so nothing is applied automatically.
+		 */
+		FString JsonParent;
+		FString AssetParent;
+
+		bool ParentDiffers() const { return !JsonParent.IsEmpty(); }
+
+		/** The JSON has nothing of its own to apply: every key was changed in the asset (e.g. the .uasset was committed alone). */
+		bool IsJsonOutOfDate() const;
 	};
 
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
@@ -84,8 +95,14 @@ private:
 		TOptional<JsonBlueprintSync::FAssetDefaults> Base;
 	};
 
-	/** Compares one changed JSON file with its asset and records it as matching or pending. Returns true if it became pending. */
-	bool Detect(const FString& PackageName, const FString& Text, const FString& FileHash, JsonBlueprintSync::EAssetKind Kind);
+	/**
+	 * Compares a JSON file with its asset and records it as matching or pending. Returns true if it became pending.
+	 * bAssetChanged: the package's saved hash differs from the one recorded at the last sync.
+	 */
+	bool Detect(const FString& PackageName, const FString& Text, const FString& FileHash, JsonBlueprintSync::EAssetKind Kind, bool bAssetChanged);
+
+	/** Whether the JSON file on disk is the one recorded at the last sync, i.e. it has no changes of its own. */
+	bool IsJsonUnchanged(const FString& PackageName) const;
 
 	/** Applies the keys to each asset (Blueprints first, parents before children) in one transaction. Returns the resolved packages. */
 	TArray<FString> ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, bool bNotify);

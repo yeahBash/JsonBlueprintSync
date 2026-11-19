@@ -70,6 +70,47 @@ TArray<FKeyDiff> DiffKeys(const FAssetDefaults* Base, const FAssetDefaults& File
 	return Diffs;
 }
 
+EBaseSource ChooseBase(const FBaseInputs& In)
+{
+	if (In.bPending)
+	{
+		return EBaseSource::Stored;
+	}
+	if (!In.bHasEntry)
+	{
+		return EBaseSource::None;
+	}
+	if (!In.bJsonChanged)
+	{
+		// The file is what was synced last, so whatever differs was changed in the asset, even if it is dirty or reparented.
+		return EBaseSource::File;
+	}
+	if (In.bParentDiffers || In.bAssetChanged || In.bAssetDirty)
+	{
+		// Both sides moved since the last sync, or the JSON's values are relative to another parent.
+		return EBaseSource::None;
+	}
+	return EBaseSource::Current;
+}
+
+bool CanAutoApply(bool bHasBase, bool bParentDiffers, const TArray<FKeyDiff>& Keys)
+{
+	if (!bHasBase || bParentDiffers)
+	{
+		return false;
+	}
+	bool bAnyJson = false;
+	for (const FKeyDiff& Diff : Keys)
+	{
+		if (Diff.Change == EKeyChange::Both)
+		{
+			return false;
+		}
+		bAnyJson |= Diff.Change == EKeyChange::Json;
+	}
+	return bAnyJson;
+}
+
 FAssetDefaults TakeKeys(const FAssetDefaults& Current, const FAssetDefaults& Source, const TArray<FString>& Keys)
 {
 	FAssetDefaults Result = Current;
@@ -151,6 +192,7 @@ bool FSyncCache::Load(const FString& InDir)
 		}
 		FSyncEntry Entry;
 		(*Item)->TryGetStringField(TEXT("json"), Entry.JsonHash);
+		(*Item)->TryGetStringField(TEXT("asset"), Entry.AssetHash);
 		(*Item)->TryGetBoolField(TEXT("pending"), Entry.bPending);
 		Entries.Add(Pair.Key, MoveTemp(Entry));
 	}
@@ -169,6 +211,10 @@ bool FSyncCache::Save() const
 		const FSyncEntry& Entry = Entries[Name];
 		const TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
 		Item->SetStringField(TEXT("json"), Entry.JsonHash);
+		if (!Entry.AssetHash.IsEmpty())
+		{
+			Item->SetStringField(TEXT("asset"), Entry.AssetHash);
+		}
 		if (Entry.bPending)
 		{
 			Item->SetBoolField(TEXT("pending"), true);

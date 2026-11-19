@@ -9,6 +9,7 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
+#include "IO/IoHash.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
@@ -78,6 +79,39 @@ namespace
 		}
 		return {};
 	}
+
+	/**
+	 * The package's saved hash: of the loaded package if it is in memory (that is what Detect compares), else from the asset
+	 * registry, which reads it from the file without loading it. Empty if unknown, e.g. never saved.
+	 */
+	FString GetSavedHash(const FString& PackageName)
+	{
+		FIoHash Hash;
+		if (const UPackage* Package = FindPackage(nullptr, *PackageName))
+		{
+			Hash = Package->GetSavedHash();
+		}
+		if (Hash.IsZero())
+		{
+			if (const TOptional<FAssetPackageData> Data = IAssetRegistry::GetChecked().GetAssetPackageDataCopy(FName(*PackageName)))
+			{
+				Hash = Data->GetPackageSavedHash();
+			}
+		}
+		return Hash.IsZero() ? FString() : LexToString(Hash);
+	}
+
+	/** The JSON names a parent or class and it is not the asset's. An empty parent in the JSON makes no claim. */
+	bool ParentDiffers(const FAssetDefaults& File, const FAssetDefaults& Current)
+	{
+		return !File.Parent.IsEmpty() && !File.Parent.Equals(Current.Parent, ESearchCase::CaseSensitive);
+	}
+}
+
+bool UJsonBlueprintSyncSubsystem::FPendingView::IsJsonOutOfDate() const
+{
+	return Error.IsEmpty() && bHasBase && Keys.Num() > 0
+		&& !Keys.ContainsByPredicate([](const FKeyDiff& Diff) { return Diff.Change != EKeyChange::Asset; });
 }
 
 bool UJsonBlueprintSyncSubsystem::ShouldCreateSubsystem(UObject* Outer) const
@@ -231,9 +265,18 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 		Seen.Add(PackageName);
 		const FString FileHash = HashText(Text);
 		const FSyncEntry* Entry = Cache.Find(PackageName);
-		if (Entry && !Entry->bPending && Entry->JsonHash == FileHash)
+		const FString SavedHash = GetSavedHash(PackageName);
+		const bool bAssetChanged = Entry && !Entry->AssetHash.IsEmpty() && !SavedHash.IsEmpty() && Entry->AssetHash != SavedHash;
+		if (Entry && !Entry->bPending && Entry->JsonHash == FileHash && !bAssetChanged)
 		{
-			// Unchanged since the last sync: skip without loading the asset.
+			// Neither side changed since the last sync: skip without loading the asset.
+			if (Entry->AssetHash.IsEmpty() && !SavedHash.IsEmpty())
+			{
+				// Recorded by an older plugin version: take the asset as it is now as the synced one, as that version did.
+				FSyncEntry Adopted = *Entry;
+				Adopted.AssetHash = SavedHash;
+				Cache.Set(PackageName, Adopted);
+			}
 			continue;
 		}
 
@@ -253,7 +296,7 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 			continue;
 		}
 		++Checked;
-		if (Detect(PackageName, Text, FileHash, Kind) && Settings->GetMode(Kind) == EJsonSyncMode::TwoWay)
+		if (Detect(PackageName, Text, FileHash, Kind, bAssetChanged) && Settings->GetMode(Kind) == EJsonSyncMode::TwoWay)
 		{
 			TwoWay.Add(PackageName);
 		}
@@ -281,16 +324,13 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 			FText::AsNumber(Errors.Num())), true);
 	}
 
-	// Two Way: apply what only the JSON changed. Anything that conflicts stays in the list for the user.
+	// Two Way: apply what only the JSON changed. Conflicts, a different parent and a JSON that is only out of date stay in the
+	// list for the user.
 	TArray<TPair<FString, TArray<FString>>> Requests;
 	for (const FString& PackageName : TwoWay)
 	{
 		FPendingView View;
-		if (!GetPendingView(PackageName, View) || !View.Error.IsEmpty() || !View.bHasBase)
-		{
-			continue;
-		}
-		if (View.Keys.ContainsByPredicate([](const FKeyDiff& Diff) { return Diff.Change == EKeyChange::Both; }))
+		if (!GetPendingView(PackageName, View) || !View.Error.IsEmpty() || !CanAutoApply(View.bHasBase, View.ParentDiffers(), View.Keys))
 		{
 			continue;
 		}
@@ -313,7 +353,7 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 	OnPendingChanged.Broadcast();
 }
 
-bool UJsonBlueprintSyncSubsystem::Detect(const FString& PackageName, const FString& Text, const FString& FileHash, EAssetKind Kind)
+bool UJsonBlueprintSyncSubsystem::Detect(const FString& PackageName, const FString& Text, const FString& FileHash, EAssetKind Kind, bool bAssetChanged)
 {
 	const FSyncEntry* Entry = Cache.Find(PackageName);
 	const TOptional<FSyncEntry> OldEntry = Entry ? TOptional<FSyncEntry>(*Entry) : TOptional<FSyncEntry>();
@@ -333,40 +373,66 @@ bool UJsonBlueprintSyncSubsystem::Detect(const FString& PackageName, const FStri
 		return false;
 	}
 	const FAssetDefaults Current = Capture(Asset);
-	if (State.File && ValuesEqual(*State.File, Current))
+	const bool bParentDiffers = State.File && ParentDiffers(*State.File, Current);
+	if (State.File && !bParentDiffers && ValuesEqual(*State.File, Current))
 	{
-		// They match, e.g. a teammate committed both. Record saved state only: recording an unsaved match would hide the
-		// difference after an editor restart.
+		// They match, e.g. a teammate committed both, or only the asset's graph changed. Record saved state only: recording an
+		// unsaved match would hide the difference after an editor restart.
 		Pending.Remove(PackageName);
 		if (!IsDirty(Asset))
 		{
 			Cache.DeleteBase(PackageName);
-			Cache.Set(PackageName, { FileHash, false });
+			Cache.Set(PackageName, { FileHash, GetSavedHash(PackageName), false });
 		}
 		else if (OldEntry && OldEntry->bPending)
 		{
 			Cache.DeleteBase(PackageName);
-			Cache.Set(PackageName, { OldEntry->JsonHash, false });
+			Cache.Set(PackageName, { OldEntry->JsonHash, OldEntry->AssetHash, false });
 		}
 		return false;
 	}
 
-	// They differ. The base tells which side changed each key: the asset as it was when the JSON change was first seen.
-	if (OldEntry && OldEntry->bPending)
+	// They differ. The base (the values both sides had at the last sync) tells which side changed each key.
+	FBaseInputs Inputs;
+	Inputs.bPending = OldEntry && OldEntry->bPending;
+	Inputs.bHasEntry = OldEntry.IsSet();
+	Inputs.bJsonChanged = !OldEntry || OldEntry->JsonHash != FileHash;
+	Inputs.bAssetChanged = bAssetChanged;
+	Inputs.bAssetDirty = IsDirty(Asset);
+	Inputs.bParentDiffers = bParentDiffers;
+	switch (ChooseBase(Inputs))
+	{
+	case EBaseSource::Stored:
 	{
 		FAssetDefaults Base;
 		if (Cache.LoadBase(PackageName, Base))
 		{
 			State.Base = MoveTemp(Base);
 		}
+		break;
 	}
-	else if (OldEntry && !IsDirty(Asset))
-	{
-		// Known asset, saved state: everything that differs now was changed in the JSON.
+	case EBaseSource::File:
+		// The JSON is the one last synced, so the asset changed every key that differs: the JSON is out of date.
+		if (State.File)
+		{
+			State.Base = *State.File;
+			Cache.SaveBase(PackageName, *State.File);
+		}
+		break;
+	case EBaseSource::Current:
+		// The asset is the one last synced, so the JSON changed every key that differs.
 		State.Base = Current;
 		Cache.SaveBase(PackageName, Current);
+		break;
+	case EBaseSource::None:
+		// Never synced on this machine, or both sides changed: unknown, every key is a conflict.
+		break;
 	}
-	// Otherwise (never synced on this machine, or unsaved edits): unknown, every key is a conflict.
+	if (bParentDiffers)
+	{
+		UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: the JSON was written for parent %s, the asset's parent is %s"), *PackageName,
+			*State.File->Parent, *Current.Parent);
+	}
 
 	if (State.File)
 	{
@@ -377,7 +443,8 @@ bool UJsonBlueprintSyncSubsystem::Detect(const FString& PackageName, const FStri
 	{
 		UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: %s"), *GetJsonPath(PackageName), *State.Error);
 	}
-	Cache.Set(PackageName, { OldEntry ? OldEntry->JsonHash : FString(), true });
+	// Keep the hashes of the last sync: they tell whether the file still has no changes of its own.
+	Cache.Set(PackageName, { OldEntry ? OldEntry->JsonHash : FString(), OldEntry ? OldEntry->AssetHash : FString(), true });
 	Pending.Add(PackageName, MoveTemp(State));
 	Resolved.Remove(PackageName);
 	return true;
@@ -413,7 +480,13 @@ bool UJsonBlueprintSyncSubsystem::GetPendingView(const FString& PackageName, FPe
 		OutView.Error = TEXT("cannot load the asset");
 		return true;
 	}
-	OutView.Keys = DiffKeys(State->Base.GetPtrOrNull(), *State->File, Capture(Asset));
+	const FAssetDefaults Current = Capture(Asset);
+	OutView.Keys = DiffKeys(State->Base.GetPtrOrNull(), *State->File, Current);
+	if (ParentDiffers(*State->File, Current))
+	{
+		OutView.JsonParent = State->File->Parent;
+		OutView.AssetParent = Current.Parent;
+	}
 	return true;
 }
 
@@ -579,17 +652,26 @@ bool UJsonBlueprintSyncSubsystem::WriteJson(UObject* Asset)
 	// Record saved state only (see Detect). The save event fires after the dirty flag is cleared.
 	if (!IsDirty(Asset))
 	{
-		Cache.Set(PackageName, { HashText(ToJson(Doc)), false });
+		// The saved hash is already the new one when the save event fires.
+		Cache.Set(PackageName, { HashText(ToJson(Doc)), GetSavedHash(PackageName), false });
 		Resolved.Remove(PackageName);
 		SaveCache();
 	}
 	return true;
 }
 
+bool UJsonBlueprintSyncSubsystem::IsJsonUnchanged(const FString& PackageName) const
+{
+	const FSyncEntry* Entry = Cache.Find(PackageName);
+	FString Text;
+	return Entry && !Entry->JsonHash.IsEmpty() && FFileHelper::LoadFileToString(Text, *GetJsonPath(PackageName))
+		&& Entry->JsonHash == HashText(Text);
+}
+
 void UJsonBlueprintSyncSubsystem::MarkPending(const FString& PackageName, FPending&& State)
 {
 	const FSyncEntry* Entry = Cache.Find(PackageName);
-	Cache.Set(PackageName, { Entry ? Entry->JsonHash : FString(), true });
+	Cache.Set(PackageName, { Entry ? Entry->JsonHash : FString(), Entry ? Entry->AssetHash : FString(), true });
 	Cache.DeleteBase(PackageName);
 	Pending.Add(PackageName, MoveTemp(State));
 	Resolved.Remove(PackageName);
@@ -671,6 +753,13 @@ void UJsonBlueprintSyncSubsystem::OnPackageSaved(const FString& PackageFileName,
 	const FSyncEntry* Entry = Cache.Find(PackageName);
 	if (Pending.Contains(PackageName) || (Entry && Entry->bPending))
 	{
+		if (IsJsonUnchanged(PackageName))
+		{
+			// The JSON has no changes of its own, it only missed the asset's (e.g. the .uasset was committed alone). Saving the
+			// asset is the natural fix, so write it.
+			OverwriteJson(PackageName);
+			return;
+		}
 		NotifySaveSkipped(PackageName);
 		return;
 	}

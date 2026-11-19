@@ -62,7 +62,7 @@ Each asset type has a mode, set in **Project Settings > Plugins > JSON Blueprint
 |---|---|---|
 | **None** | Nothing. | Ignored. |
 | **Write JSON Only** | Writes the JSON. | Listed in the JSON Sync tab. Applied only when you click **Apply JSON**. |
-| **Two Way** | Writes the JSON. | Applied automatically when the editor starts, unless a key conflicts. Conflicts are listed in the JSON Sync tab. |
+| **Two Way** | Writes the JSON. | Applied automatically when the editor starts, unless a key conflicts or the parent differs. Those are listed in the JSON Sync tab. |
 
 | Asset type | Default | Two Way allowed |
 |---|---|---|
@@ -101,8 +101,10 @@ One file per asset under `/Game`, at `<JsonDir>/<package path>.json`. For exampl
 - **The file is complete: a missing key means the archetype's value.** Deleting a line and applying the file resets that property
   to the parent's (or the class's) value.
 - **Arrays and structs are replaced whole.**
-- **`parent`** is the parent class of a Blueprint, or the class of a data asset. It is informational: a warning is logged if the
-  asset's actual class differs.
+- **`parent`** is the parent class of a Blueprint, or the class of a data asset. It is not applied: reparenting is done in the
+  editor. If it differs from the asset's (e.g. the Blueprint was reparented), the values in the file are relative to another
+  archetype. The editor then lists the asset as **parent differs** and applies nothing automatically, and the commandlet logs a
+  warning.
 - Output is deterministic: sorted keys, two-space indent, LF line endings, trailing newline, no timestamps. Applying a file and
   writing it again gives the same bytes.
 - Files from version 1 of the format (`"schema": 1`, with a `reset` list) are not read. Re-export them: save the asset, or run the
@@ -142,8 +144,8 @@ properties are diffed against its class's defaults. Only properties editable on 
 
 | Event | What happens |
 |---|---|
-| Editor start (asset registry loaded) | JSON files that changed since the last sync are compared with their assets. Two Way assets with no conflicting key are applied. The rest are listed, and a notification offers **Review** (opens the JSON Sync tab) or **Later**. |
-| Asset saved | Its JSON file is written. **Exception:** if the JSON has changes that are not reviewed yet, the file is left alone and a notification says so. The asset stays in the JSON Sync tab until you choose Apply JSON or Overwrite JSON. |
+| Editor start (asset registry loaded) | Assets whose JSON file or `.uasset` changed since the last sync are compared with their JSON. Two Way assets whose JSON changed keys without conflicts are applied. The rest are listed, and a notification offers **Review** (opens the JSON Sync tab) or **Later**. |
+| Asset saved | Its JSON file is written. **Exception:** if the JSON has changes that are not reviewed yet, the file is left alone and a notification says so. The asset stays in the JSON Sync tab until you choose Apply JSON or Overwrite JSON. A JSON that is only out of date (it has no changes of its own) is written as usual. |
 | Asset renamed | The JSON file moves with it. |
 | Asset deleted | The JSON file is deleted. |
 
@@ -152,12 +154,23 @@ checked during Play In Editor.
 
 ### The JSON Sync tab
 
-Open it from **Window > JSON Sync**, or with **Review** on a notification. The top list shows the assets whose JSON differs. Select
-one to see the keys that differ, with the JSON value, the asset value, and which side changed each key:
+Open it from **Window > JSON Sync**, or with **Review** on a notification. The top list shows the assets whose JSON differs, with a
+status:
+
+- **N keys**: the JSON changed keys. Two Way assets in this state are applied at start-up and rarely stay listed.
+- **N keys, conflicts**: some keys are conflicts (see below).
+- **N keys, JSON out of date**: the asset changed and the JSON did not, e.g. a teammate committed the `.uasset` without its JSON.
+  Save the asset or press **Overwrite JSON**.
+- **N keys, parent differs**: the JSON names another parent (or data asset class) than the asset has, e.g. after a reparent. The
+  JSON's values were relative to the old parent. Usually **Overwrite JSON** is right.
+- **Cannot read the JSON**: only Overwrite JSON is possible.
+
+Select an asset to see the keys that differ, with the JSON value, the asset value, and which side changed each key:
 
 - **JSON**: only the file changed. Ticked by default.
-- **Asset**: only the asset changed (e.g. you edited it but have not saved yet). Not ticked.
-- **Both**: both sides changed, or there is no record of what the asset was before, so the plugin cannot tell. Not ticked, and
+- **Asset**: only the asset changed (e.g. you edited it but have not saved yet, or its `.uasset` was committed without the JSON).
+  Not ticked.
+- **Conflict**: both sides changed, or there is no record of what the asset was before, so the plugin cannot tell. Not ticked, and
   highlighted. Decide these yourself.
 
 `(default)` means the key is not set on that side, so it has the archetype's value.
@@ -175,19 +188,30 @@ Ticks are kept while the tab refreshes.
 
 ### How the plugin tells which side changed
 
-When a changed JSON file is found, the plugin captures the asset's values at that moment and keeps them as the **base**
-(`Saved/JsonBlueprintSync/Base/`). A key is a JSON change if the asset still has the base value, an asset change if the file has the
-base value, and a conflict otherwise. There is no base, so every differing key shows as **Both**, when:
+When a difference is found, the plugin works out the **base**: the values both sides had at the last sync. It keeps the base in
+`Saved/JsonBlueprintSync/Base/` until the difference is resolved. A key is a JSON change if the asset still has the base value, an
+asset change if the file has the base value, and a conflict otherwise.
 
+- Only the JSON changed: the base is the asset as it is now, so every differing key is a JSON change.
+- Only the `.uasset` changed: the base is the JSON file, so every differing key is an asset change (**JSON out of date**).
+
+There is no base, so every differing key shows as **Conflict**, when:
+
+- both the JSON and the `.uasset` changed since the last sync, or
 - the asset had unsaved changes when the file changed, or
+- the JSON changed and names another parent than the asset has, or
 - the plugin has never synced the asset before, or
 - the asset was saved while its JSON had unreviewed changes.
+
+A Blueprint is also changed by edits to its parent Blueprint or its C++ class, without its own `.uasset` changing. Such a change is
+not detected until the Blueprint is saved; `-verify` catches it.
 
 ### Local state
 
 Sync state is kept in `Saved/JsonBlueprintSync/`, which is local and should not be committed. `cache.json` stores, per asset, the
-hash of the JSON as of the last sync and whether the asset is waiting for review. Files whose hash matches are skipped without loading
-the asset. Deleting the folder is safe: on the next start every file is compared again, without a base.
+hash of the JSON and the package's saved hash as of the last sync, and whether the asset is waiting for review. An asset whose two
+hashes both match is skipped without loading it; the package hash comes from the asset registry. Deleting the folder is safe: on the
+next start every file is compared again, without a base.
 
 Applying a file in the editor does not compile the Blueprint, because compiling would break undo. The values survive the next
 compile, just like Details-panel edits. For Widget Blueprints, the Designer shows the new values straight away. A running game
@@ -247,6 +271,15 @@ Automation tests are under `JsonBlueprintSync.*`:
 ```
 UnrealEditor-Cmd.exe <Project>.uproject -ExecCmds="Automation RunTests JsonBlueprintSync;Quit" -unattended -nullrhi -nosplash
 ```
+
+They cover the library and the subsystem's decision rules (which base to use, when Two Way applies on its own), not the editor
+subsystem itself, the JSON Sync tab or the commandlet. [Docs/ManualTests.md](Docs/ManualTests.md)
+is a step-by-step checklist for those.
+
+## How it works
+
+[Docs/Internals.md](Docs/Internals.md) describes each part of the plugin, how the parts work together, and the caveats and corner
+cases.
 
 ## License
 

@@ -67,6 +67,10 @@ private:
 	FString SelectedPackage;
 	FString SelectedError;
 	bool bSelectedHasBase = false;
+	bool bSelectedOutOfDate = false;
+	/** Set if the JSON was written for another parent or class than the asset has. */
+	FString SelectedJsonParent;
+	FString SelectedAssetParent;
 
 	/** The user's ticks for the selected package, by key, so that a refresh keeps them. */
 	TMap<FString, bool> Ticks;
