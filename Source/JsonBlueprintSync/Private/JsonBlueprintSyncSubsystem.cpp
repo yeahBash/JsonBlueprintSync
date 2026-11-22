@@ -5,6 +5,7 @@
 #include "JsonBlueprintSyncModule.h"
 #include "JsonBlueprintSyncSettings.h"
 #include "Editor.h"
+#include "FileHelpers.h"
 #include "Framework/Docking/TabManager.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "HAL/FileManager.h"
@@ -677,9 +678,35 @@ bool UJsonBlueprintSyncSubsystem::GetPendingView(const FString& PackageName, FPe
 	return true;
 }
 
-bool UJsonBlueprintSyncSubsystem::ApplyJson(const FString& PackageName, const TArray<FString>& Keys)
+bool UJsonBlueprintSyncSubsystem::ApplyJson(const FString& PackageName, const TArray<FString>& Keys, bool bSave)
 {
-	const bool bResolved = ApplyBatch({ { PackageName, Keys } }, true).Contains(PackageName);
+	bool bResolved = ApplyBatch({ { PackageName, Keys } }, !bSave).Contains(PackageName);
+	if (bResolved && bSave)
+	{
+		UObject* Asset = LoadAsset(PackageName);
+		const FText AssetName = FText::FromString(GetAssetName(PackageName));
+		if (Asset && IsDirty(Asset))
+		{
+			// Saving writes the JSON (OnPackageSaved, as for any resolved asset). Checks the file out first if source control needs it.
+			UPackage* Package = Asset->GetPackage();
+			const FEditorFileUtils::EPromptReturnCode Result = FEditorFileUtils::PromptForCheckoutAndSave({ Package }, true, false);
+			if (Result == FEditorFileUtils::PR_Success && !Package->IsDirty())
+			{
+				Notify(FText::Format(LOCTEXT("AppliedSaved", "Applied the JSON to {0} and saved it."), AssetName), ENotice::Success);
+			}
+			else
+			{
+				bResolved = false;
+				Notify(FText::Format(LOCTEXT("AppliedNotSaved", "Applied the JSON to {0}, but it was not saved. Save it to write its JSON; Ctrl+Z reverts the apply."), AssetName),
+					ENotice::Warning);
+			}
+		}
+		else
+		{
+			// Nothing in the asset changed: Resolve has already written the JSON, so there is nothing to save.
+			Notify(FText::Format(LOCTEXT("AppliedNothingToSave", "Wrote the JSON of {0}; the asset did not change."), AssetName), ENotice::Success);
+		}
+	}
 	OnPendingChanged.Broadcast();
 	return bResolved;
 }

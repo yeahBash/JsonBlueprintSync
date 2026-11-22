@@ -25,11 +25,11 @@ namespace JsonBlueprintSync
 	/** Which side changed a key that differs between the JSON file and the asset. */
 	enum class EKeyChange : uint8
 	{
-		/** The asset still has the base value: the JSON changed it. Applied by default. */
+		/** The asset still has the base value: the JSON changed it. Uses the JSON by default. */
 		Json,
-		/** The JSON still has the base value: the asset changed it. Kept by default; saving the asset writes it to the JSON. */
+		/** The JSON still has the base value: the asset changed it. Keeps the asset's value by default; saving the asset writes it to the JSON. */
 		Asset,
-		/** Both changed it, or there is no base to tell. Kept by default and highlighted. */
+		/** Both changed it, or there is no base to tell. The user must choose a side before applying; never applied automatically. */
 		Both,
 	};
 
@@ -43,7 +43,7 @@ namespace JsonBlueprintSync
 		TOptional<FString> AssetValue;
 		EKeyChange Change = EKeyChange::Both;
 
-		/** Whether the key is ticked (taken from the JSON) by default. */
+		/** Whether the key uses the JSON value by default. */
 		bool TakeJsonByDefault() const { return Change == EKeyChange::Json; }
 	};
 

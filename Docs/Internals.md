@@ -71,7 +71,7 @@ Terms used below:
   saving it does not write its JSON.
 - **Resolved**: the user applied or overwrote the JSON in this session, but the asset has not been saved since. The plugin
   remembers which file the user reviewed, so a file that changes again before the save is not overwritten.
-- **Undone**: an Apply JSON that was undone with Ctrl+Z. The asset is pending again, as before the apply.
+- **Undone**: an apply that was undone with Ctrl+Z. The asset is pending again, as before the apply.
 - **Synced kind**: the asset is a Blueprint, Widget Blueprint or data asset, and the mode for that kind is not None.
 
 ## 2. Files
@@ -372,12 +372,12 @@ subsystem uses them, and the tests check them directly.
 DiffKeys lists every key whose value differs between the file and the asset, sorted case-sensitively. For each one it records the
 JSON value, the asset value (either can be unset, meaning "not overridden", shown as `(default)`) and which side changed it:
 
-| Base value equals… | Change | Ticked by default | Meaning |
+| Base value equals… | Change | The tab uses by default | Meaning |
 |---|---|---|---|
-| the asset's value | `Json` | yes | Only the file changed since the base. |
-| the file's value | `Asset` | no | Only the asset changed since the base. |
-| neither | `Both` (shown as **Conflict**) | no | Both changed, to different values. |
-| no base at all | `Both` | no | It cannot be told. |
+| the asset's value | `Json` | JSON | Only the file changed since the base. |
+| the file's value | `Asset` | Asset | Only the asset changed since the base. |
+| neither | `Both` (shown as **Conflict**) | nothing: the user must choose | Both changed, to different values. |
+| no base at all | `Both` | nothing: the user must choose | It cannot be told. |
 
 "Equals" includes "both unset". A key the file removed (unset in the file, set in the base and the asset) is therefore a `Json`
 change, and taking it resets the key.
@@ -386,7 +386,7 @@ change, and taking it resets the key.
 
 TakeKeys returns `Current` with the listed keys taken from `Source`. Where `Source` does not have a key, the key is removed from the
 result, which resets it to the archetype. This is how a partial choice becomes the complete document that `Apply` needs:
-`Apply(TakeKeys(Capture(Asset), File, TickedKeys))`.
+`Apply(TakeKeys(Capture(Asset), File, KeysThatUseJson))`.
 
 Details:
 
@@ -471,7 +471,7 @@ and the subsystem never run together.
 |---|---|---|
 | `Cache` | disk (`Saved/`) | `FSyncCache`: JSON hash, saved hash and pending flag per package, plus base files |
 | `Pending` | memory | package → `FPending { Kind, File (parsed doc, unset if broken), Error, Base (unset if unknown), FileHash (of the file compared) }`. Mirrors the cache's pending entries once a sync has run. |
-| `Resolved` | memory, this session only | package → `FResolved { Kind, FileHash, ReviewedFile, Before, TransactionId }` for assets applied or overwritten but not saved since. `FileHash` and `ReviewedFile` are the file the user reviewed; `Before` is the pending state before Apply JSON (unset for Overwrite JSON); `TransactionId` is the Apply JSON transaction, if it changed the asset. |
+| `Resolved` | memory, this session only | package → `FResolved { Kind, FileHash, ReviewedFile, Before, TransactionId }` for assets applied or overwritten but not saved since. `FileHash` and `ReviewedFile` are the file the user reviewed; `Before` is the pending state before the apply (unset for Overwrite JSON); `TransactionId` is the apply transaction, if it changed the asset. |
 | `Undone` | memory, this session only | the same records for applies that were undone, so that a redo can resolve them again and Two Way does not re-apply the same file |
 | `UndoRedoTransactionId` | memory | the transaction being undone or redone, set by `MatchesContext` just before `PostUndo` / `PostRedo` |
 | `PendingRemovals` | memory | packages reported as removed, checked on the next tick |
@@ -571,7 +571,18 @@ in-memory values. `IsJsonOutOfDate()` is true when there is a base and every key
 
 #### ApplyJson, ApplyBatch and Resolve
 
-`ApplyJson(Package, Keys)` is the tab's Apply JSON: `ApplyBatch` with one request, then `OnPendingChanged`.
+`ApplyJson(Package, Keys, bSave)` is the tab's **Apply** (`bSave` false) and **Apply and Save** (`bSave` true): `ApplyBatch` with one
+request, then `OnPendingChanged`. With `bSave`:
+
+- `ApplyBatch` shows no success toast; `ApplyJson` shows its own.
+- If the asset is dirty after the apply, it is saved with `FEditorFileUtils::PromptForCheckoutAndSave(bCheckDirty, no prompt)`, which
+  checks the file out first if source control needs it. The save goes through `OnPackageSaved` like a Ctrl+S: the asset is
+  resolved and the file is the reviewed one, so the JSON is written and `Resolved` is cleared. Toast: "Applied the JSON to … and
+  saved it."
+- If the save fails or is declined, the asset stays dirty and resolved, as after a plain Apply. Toast (warning): "Applied the JSON
+  to …, but it was not saved."
+- If the asset is not dirty (every key used the asset, and it had no unsaved edits), `Resolve` has already written the JSON, so
+  nothing is saved. Toast: "Wrote the JSON of …; the asset did not change."
 
 `ApplyBatch(Requests)`:
 
@@ -592,8 +603,8 @@ in-memory values. `IsJsonOutOfDate()` is true when there is a base and every key
 2. If the asset is now dirty, add it to `Resolved` with the reviewed file (the pending state's `File` and `FileHash`), the pending
    state itself as `Before`, and the transaction id. Its next save writes the JSON, including the keys where the user kept the
    asset's value, as long as the file is still the reviewed one.
-3. If it is not dirty (nothing changed, e.g. the user unticked every key), write the JSON **now**. Otherwise no save would ever
-   write it. In effect, applying with nothing ticked is the same as Overwrite JSON.
+3. If it is not dirty (nothing changed, e.g. every key used the asset), write the JSON **now**. Otherwise no save would ever
+   write it. In effect, applying with every key on Asset is the same as Overwrite JSON.
 
 #### Undo and redo
 
@@ -617,8 +628,10 @@ editor start applies it again.
 
 OverwriteJson loads the asset and clears the pending state the same way as `Resolve`. It then writes `Capture(asset)` to the file
 and, if the asset is dirty, adds it to `Resolved` with the file now on disk as the reviewed file (the one just written, or the old
-one if the write failed). It has no transaction, so there is nothing to undo. It also works when the file is broken, which is the way out of an unparsable file
-besides fixing it.
+one if the write failed). It has no transaction, so there is nothing to undo. It also works when the file is broken. The tab offers
+it only then (**Overwrite JSON**, shown only for "Cannot read the JSON"), as the way out of an unparsable file besides fixing it.
+For a readable file, **All from Asset** + **Apply** does the same through `Resolve`. The save guard also calls it for a JSON that is
+only out of date.
 
 Caveat: if the asset has unsaved edits, the file gets the **unsaved** values. If you then close the editor without saving, the file
 has values the `.uasset` does not. The next start detects this: the hash still differs, so the file is compared again and listed as
@@ -657,7 +670,7 @@ The save event fires for every saved package. The handler returns at the first c
      base because the asset has been edited since the file changed, so either side may have changed any key.
 7. Otherwise, `WriteJson`.
 
-Resolved assets get step 5 instead of the save guard: after Apply JSON the file still differs from the cached hash, and the save
+Resolved assets get step 5 instead of the save guard: after an apply the file still differs from the cached hash, and the save
 that follows is meant to write it.
 
 #### OnAssetRenamed
@@ -697,6 +710,7 @@ program holds it open).
   | "renamed A to B, but its JSON cannot be read" | Warning | rename of an asset whose JSON does not parse |
   | "not checked during Play In Editor" | Warning | the console command or Refresh during PIE |
   | "Cannot apply the JSON of …" | Error | an apply failed |
+  | "Applied the JSON to …, but it was not saved" | Warning | Apply and Save could not save the asset (declined checkout, failed save) |
 
 - `ShowPendingNotification` replaces the previous "N asset(s) differ" toast with a sticky one: up to eight names, then "and N more",
   with Review (opens the tab) and Later (closes the toast) buttons. It is shown after every `SyncFromJson` that leaves something
@@ -705,7 +719,7 @@ program holds it open).
 
 ### 2.8 The JSON Sync tab: SJsonSyncPanel
 
-`SJsonSyncPanel` is a compound widget with:
+`SJsonSyncPanel` is a compound widget laid out like a merge tool:
 
 - a summary line and a **Refresh** button (= `SyncFromJson`);
 - on the left (30%), the **asset list**: Asset, Type, Status. Status, first match wins: "Cannot read the JSON" (orange),
@@ -713,27 +727,39 @@ program holds it open).
   opens its editor;
 - on the right (70%):
   - a detail line: the package, and, first match wins, the parse error, the two parents, the "JSON has no changes of its own" note,
-    the "unknown which side changed, every key is a conflict" note, or "ticked keys take the JSON value";
-  - the **key list**: Use JSON (checkbox), Key, JSON value, Asset value, Changed in (JSON / Asset / Conflict, with tooltips;
-    Conflict in orange). `(default)` in grey means the key is not set on that side;
-  - buttons **Tick All**, **Tick None**, **Show in Content Browser**, **Overwrite JSON** and **Apply JSON** (primary).
+    the "unknown which side changed, every key is a conflict" note, or how to choose;
+  - the **key list** (multi-select): Key, JSON value, Asset value, Changed in (JSON / Asset / Conflict, with tooltips; Conflict in
+    orange), Use (JSON / Asset / **Choose** in orange). `(default)` in grey means the key is not set on that side. The value the
+    key uses has a highlighted background (the theme's primary colour); the other one is dimmed;
+  - below it: **All from JSON**, **All from Asset**, **Reset**, the counter "N conflicts to choose" (orange), **Show in Content
+    Browser**, **Overwrite JSON** (only for an unreadable file), **Apply** and **Apply and Save** (primary).
+
+Each key has an `EKeySource`: `Json`, `Asset` or `None` (not chosen). `GetDefaultSource` gives `Json` for a `Json` change, `Asset`
+for an `Asset` change and `None` for `Both`. The user changes it by:
+
+- a left click on the JSON or the asset value cell (`SKeyRow::MakeValueCell`). The click is left unhandled, so the row's
+  selection still updates;
+- the context menu (`OnKeyContextMenuOpening`) on the selected keys: Use JSON, Use Asset, Reset;
+- the buttons, for every key. Reset (`None`) puts a key back to its default.
 
 Behaviour:
 
 - It subscribes to `OnPendingChanged` and rebuilds both lists on each broadcast (`Refresh`).
 - The selection is kept by package name. If the selected asset is gone, the first one is selected.
-- Ticks are stored per key in `Ticks`, so a refresh keeps the user's choices for keys that still differ. They are **reset when the
-  selection changes** to another asset. Keys without a stored tick use `TakeJsonByDefault()`.
-- Apply JSON and the Tick buttons are disabled when the file cannot be parsed. Overwrite JSON and Show in Content Browser only need
-  a selection.
-- `bRefreshing` keeps the selection callback from resetting ticks while the list is being rebuilt.
+- Choices are stored in `Choices`, by package and key, with the JSON and asset values they were made for. They survive a refresh
+  and switching to another asset and back. A stored choice whose values no longer match the key's (the file or the asset changed
+  it since) is dropped, and the key goes back to its default. Choices for assets no longer listed are dropped.
+- Apply and Apply and Save are enabled when no key is `None` and the file can be parsed. They pass the keys that use `Json` to
+  `ApplyJson`. The bulk buttons need at least one key and a readable file.
+- `bRefreshing` keeps the selection callback from reacting while the list is being rebuilt.
 
 Caveats:
 
 - The tab does not listen to asset edits. After you change the asset, the Asset value and Changed in columns are stale until the
-  next refresh (Refresh button, any apply or overwrite, or selecting another asset and back, which also resets the ticks). Apply JSON
-  still uses the asset's current values for the unticked keys, because `ApplyBatch` captures the asset again.
-- Ticking a key whose values have meanwhile become equal does no harm: `Apply` finds the value identical and skips it.
+  next refresh (Refresh button, any apply, or selecting another asset and back). Apply still uses the asset's current values for
+  the keys that use the asset, because `ApplyBatch` captures the asset again. A choice made on a stale row is dropped at the next
+  refresh if the asset value changed.
+- Using JSON for a key whose values have meanwhile become equal does no harm: `Apply` finds the value identical and skips it.
 
 ### 2.9 Commandlet: JsonBlueprintSyncCommandlet
 
@@ -823,7 +849,7 @@ If the teammate committed both but they disagree, both hashes changed: pending w
 1. You reparent `BP_Child` from `BP_A` to `BP_B`. The compile keeps the child's own overrides and takes the rest from `BP_B`.
 2. You save: the JSON is written with the new `parent` and the deltas against `BP_B`. Nothing else is needed.
 3. A teammate pulls both files: they match. If they pull only the `.uasset`, the JSON is out of date and names `BP_A`: listed as
-   "parent differs", with the keys as `Asset` changes. Overwrite JSON (or saving the asset) fixes it.
+   "parent differs", with the keys as `Asset` changes. Apply with every key on Asset (or saving the asset) fixes it.
 4. If the JSON also changed (both sides moved, or the JSON still describes the old parent), there is no base: every key is a
    conflict and Two Way applies nothing.
 
@@ -840,12 +866,15 @@ package. A Refresh before the reload compares the file with the old in-memory va
 
 ### Reviewing in the tab
 
-1. Select the asset. The keys are listed with their default ticks.
-2. Apply JSON → `TakeKeys(Capture, File, ticked)` → `Apply` in one transaction → `MarkModified` → `Resolve`.
-3. The asset is modified and in `Resolved`. Ctrl+S → `OnPackageSaved` → not pending, resolved, and the file is still the reviewed
-   one → `WriteJson` writes the merged values (ticked keys from the JSON, the rest from the asset) and records the hash.
-4. Had the user pressed Ctrl+Z before saving, `PostUndo` would have put the asset back in `Pending` and the save would have skipped
-   the JSON.
+1. Select the asset. The keys are listed with their default sources; conflicts show **Choose**.
+2. The user chooses a source for each conflict (click, context menu or bulk button).
+3. Apply → `TakeKeys(Capture, File, keys that use JSON)` → `Apply` in one transaction → `MarkModified` → `Resolve`.
+4. The asset is modified and in `Resolved`. Ctrl+S → `OnPackageSaved` → not pending, resolved, and the file is still the reviewed
+   one → `WriteJson` writes the merged values (keys that use JSON from the file, the rest from the asset) and records the hash.
+   Apply and Save does step 4 at once.
+5. Had the user pressed Ctrl+Z before saving, `PostUndo` would have put the asset back in `Pending` and the save would have skipped
+   the JSON. After Apply and Save, the record is already gone: Ctrl+Z is an ordinary edit, and the next save writes the asset's
+   values to the JSON.
 
 ### Renaming
 
@@ -864,7 +893,7 @@ package. A Refresh before the reload compares the file with the old in-memory va
   │ H, A      │                                │ (Json / Asset / │
   └─────┬─────┘                                │  Conflict)      │
         │ both changed, asset dirty, other     └────────┬────────┘
-        │ parent, never synced, or save guard           │ Apply JSON / Overwrite JSON
+        │ parent, never synced, or save guard           │ Apply / Apply and Save / Overwrite JSON
         ▼                                               ▼
   ┌──────────────────┐  Apply / Overwrite        ┌──────────────┐
   │ PENDING, no base │──────────────────────────▶│ RESOLVED     │  (asset dirty)
@@ -904,14 +933,14 @@ is never skipped by the hash check.
   removed.
 - *JSON for an asset whose mode is None*: ignored silently. Its pending state is dropped.
 - *Git merge conflict markers in a JSON file*: the file does not parse. The asset is listed as "Cannot read the JSON". Fix the file
-  and Refresh, or use Overwrite JSON.
+  and Refresh, or use Overwrite JSON (the only action the tab offers for it).
 - *Only whitespace or formatting changed in the JSON*: the hash changes, `ValuesEqual` is true, so at start-up the new hash is just
   recorded, and on save the file is rewritten in canonical form.
 - *Wrong `asset` field* (e.g. a file copied by hand): the editor never checks it, because `ValuesEqual` ignores it and `TakeKeys`
   keeps the asset's own name. `-import` rejects it and `-verify` reports it. The next write from the editor fixes it.
 - *`parent` mismatch* (a reparent, or a data asset whose class changed): the editor lists the asset as "parent differs" and
   applies nothing automatically, even when the values are equal. If only the `.uasset` changed, the keys are `Asset` changes and
-  saving the asset fixes the JSON; if the JSON changed too, there is no base. Applying ticked keys merges onto the asset's own
+  saving the asset fixes the JSON; if the JSON changed too, there is no base. Applying keys that use JSON merges onto the asset's own
   parent. `-import` only warns. An empty `parent` in a hand-written file makes no claim.
 - *`.uasset` changed, JSON not* (committed alone, or edited with the plugin's mode None): detected at start-up through the saved
   hash. Listed as "JSON out of date" if the values differ, recorded silently if they do not.
@@ -926,20 +955,25 @@ is never skipped by the hash check.
 
 - *One bad value*: nothing in that asset is applied, it stays pending, and the Output Log lists the problems. Other assets in the
   same batch are still applied.
-- *Unknown key in the JSON* (e.g. a renamed variable): ticked, the apply fails. Unticked, the apply succeeds, and the next save
-  removes the key from the JSON.
-- *Nothing ticked*: the asset keeps every value, and the JSON is overwritten at once (asset not dirty) or on the next save.
-- *Ctrl+Z after Apply JSON or a Two Way auto-apply*: the values go back and the asset is pending again, with the base it had
+- *Unknown key in the JSON* (e.g. a renamed variable): using JSON for it, the apply fails. Using the asset, the apply succeeds, and
+  the next save removes the key from the JSON.
+- *Every key uses the asset*: the asset keeps every value, and the JSON is overwritten at once (asset not dirty) or on the next
+  save (Apply and Save: at once).
+- *Apply and Save, then Ctrl+Z*: the save already wrote the merged JSON and cleared `Resolved`, so the undo is an ordinary edit.
+  The asset is modified with its old values, and saving it writes them to the JSON. Nothing is lost silently: both files are on
+  disk and the change shows in git.
+- *Apply and Save, checkout declined*: nothing is saved. The asset stays modified and resolved, as after Apply.
+- *Ctrl+Z after Apply or a Two Way auto-apply*: the values go back and the asset is pending again, with the base it had
   before, and a warning toast. Saving it does not write the JSON. Ctrl+Y resolves it again.
-- *Ctrl+Z of a Two Way auto-apply, then a restart*: `Undone` is not kept, so the next start applies the file again. Use Overwrite
-  JSON to keep the asset's values.
-- *Ctrl+Z after Apply JSON, then edits, then Ctrl+Y*: Unreal drops the redo history when you edit, so there is nothing to redo. The
+- *Ctrl+Z of a Two Way auto-apply, then a restart*: `Undone` is not kept, so the next start applies the file again. Choose All
+  from Asset and Apply in the tab to keep the asset's values.
+- *Ctrl+Z after Apply, then edits, then Ctrl+Y*: Unreal drops the redo history when you edit, so there is nothing to redo. The
   asset stays pending.
 - *Ctrl+Z of a later edit (not the apply)*: nothing changes in the sync state. The asset stays resolved.
 - *Apply, then close the editor without saving*: the cache still has the old hash, so the next start detects the file again and
   lists it (or Two Way applies it again).
 - *Apply, then the JSON changes again before saving*: the save (or a Refresh before it) notices that the file is no longer the
-  reviewed one. The asset is pending again with the reviewed file as the base, so the new changes are ticked `Json` keys and the
+  reviewed one. The asset is pending again with the reviewed file as the base, so the new changes are `Json` keys (using JSON) and the
   values the user kept are `Asset` keys. The save does not write the JSON. A Two Way asset is applied again at the Refresh if
   nothing conflicts.
 - *Apply, then Refresh with nothing new*: the asset is skipped; it is not listed again.
@@ -969,7 +1003,7 @@ is never skipped by the hash check.
 - *Mode None, then back on*: assets saved while the mode was None have a new saved hash. If the JSON did not change, the next
   check lists them as "JSON out of date"; if it did, both sides changed and every key is a conflict. Entries without a saved hash
   (from an older plugin version) still take a base from the saved asset in that case, listing the asset's own edits as **JSON**
-  changes, ticked.
+  changes, using JSON.
 
 **Rename and delete**
 
@@ -992,7 +1026,7 @@ where noted.
 
 1. **Rename then edit before saving.** The renamed asset has no cache entry. Its first save goes through the save guard. If you
    edited the asset after the rename, the values differ from the moved file, and the save is reported as "did not write its JSON"
-   (pending, no base) although nothing came from outside. Resolve it with Overwrite JSON.
+   (pending, no base) although nothing came from outside. Resolve it with All from Asset and Apply.
 2. **No file watching.** Changes to JSON files are only noticed at start-up, on Refresh or the console command, or by the save
    guard.
 3. **The tab's values are not live** while you edit the asset (see [2.8](#28-the-json-sync-tab-sjsonsyncpanel)).

@@ -156,10 +156,12 @@ Expected:
 
 - The toast "JSON Sync: 1 asset(s) differ from their JSON" appears, with **Review** and **Later**.
 - **Review** opens the tab. `BP_SyncLamp` is listed with Type Blueprint and Status "1 keys".
-- The key `FlickerSpeed` has JSON value `4.0`, Asset value `2.500000`, Changed in **JSON**, and is ticked.
+- The key `FlickerSpeed` has JSON value `4.0`, Asset value `2.500000`, Changed in **JSON**, and Use **JSON**. The JSON value
+  has a highlighted background; the asset value is dimmed. No conflict counter is shown, and **Apply** and **Apply and Save** are
+  enabled.
 - `cache.json` has `"pending": true` for the asset, and `Saved/JsonBlueprintSync/Base/.../BP_SyncLamp.json` exists.
 
-2. Press **Apply JSON**.
+2. Press **Apply**.
 
 Expected:
 
@@ -174,19 +176,19 @@ Expected: the file now reads `"FlickerSpeed": "4.000000"` (canonical form), and 
 
 **3.2 Closing without saving after Apply**
 
-1. Repeat 3.1 up to **Apply JSON** (change the value to `"5.0"`), then close the editor and choose **Don't Save**. Start it again.
+1. Repeat 3.1 up to **Apply** (change the value to `"5.0"`), then close the editor and choose **Don't Save**. Start it again.
 
 Expected: the asset is listed again with the same key. The change is not lost.
 
 **3.3 Undo after Apply**
 
-1. Repeat 3.1 up to **Apply JSON** (value `"6.0"`). Press Ctrl+Z.
+1. Repeat 3.1 up to **Apply** (value `"6.0"`). Press Ctrl+Z.
 
 Expected:
 
 - `FlickerSpeed` goes back to its old value.
 - A warning toast "JSON Sync: undo reverted the JSON applied to BP_SyncLamp. It is back in the JSON Sync tab…".
-- The asset is listed again with `FlickerSpeed` Changed in **JSON**, ticked, as before the apply. The base file is back and the cache
+- The asset is listed again with `FlickerSpeed` Changed in **JSON**, Use **JSON**, as before the apply. The base file is back and the cache
   has `"pending": true`.
 
 2. Press Ctrl+Y.
@@ -196,7 +198,7 @@ Expected: `FlickerSpeed` is 6.0 again and the asset leaves the tab (no toast).
 3. Press Ctrl+Z again, then save the Blueprint.
 
 Expected: the "Saved BP_SyncLamp, but did not write its JSON: the JSON has changes you have not reviewed" toast. The JSON still
-reads `"6.0"`. Press **Apply JSON** and save to finish.
+reads `"6.0"`. Press **Apply and Save** to finish.
 
 **3.4 JSON edited while the editor is open**
 
@@ -212,11 +214,11 @@ Expected: listed as in 3.1. Each further Refresh shows the toast again (known is
 
 Expected:
 
-- Two keys: `FlickerSpeed` (Changed in JSON, ticked) and `Light.Intensity` (JSON `8000.000000`, Asset `9000.000000`, Changed in
-  **Asset**, unticked).
+- Two keys: `FlickerSpeed` (Changed in JSON, Use JSON) and `Light.Intensity` (JSON `8000.000000`, Asset `9000.000000`, Changed
+  in **Asset**, Use Asset).
 - Before the Refresh, the tab still showed one key. The tab does not follow asset edits live.
 
-3. Press **Apply JSON**, then save.
+3. Press **Apply**, then save.
 
 Expected: `FlickerSpeed` takes the JSON value and Intensity stays at 9000. The saved JSON has both `7.000000` and `9000.000000`.
 
@@ -225,12 +227,19 @@ Expected: `FlickerSpeed` takes the JSON value and Intensity stays at 9000. The s
 1. Change `FlickerSpeed` in the JSON to `"8.0"` and press Refresh (asset saved, so it gets a base).
 2. In the Blueprint, set `FlickerSpeed` = 9 (do not save). Press Refresh.
 
-Expected: `FlickerSpeed` has JSON `8.0`, Asset `9.000000`, Changed in **Conflict** (orange), and is unticked. Status is
-"1 keys, conflicts".
+Expected:
 
-3. Tick it and press **Apply JSON**.
+- `FlickerSpeed` has JSON `8.0`, Asset `9.000000`, Changed in **Conflict** (orange), and Use **Choose** (orange). Neither value is
+  highlighted. Status is "1 keys, conflicts".
+- Below the list: "1 conflict to choose". **Apply** and **Apply and Save** are disabled.
 
-Expected: the value becomes 8.0.
+3. Click the asset value `9.000000`.
+
+Expected: it is highlighted, the JSON value is dimmed, Use shows **Asset**, the counter disappears and Apply is enabled.
+
+4. Click the JSON value `8.0`, then press **Apply**.
+
+Expected: Use switched to **JSON** before the apply. The value becomes 8.0.
 
 **3.7 Removing a key in the JSON resets the value**
 
@@ -239,17 +248,19 @@ Expected: the value becomes 8.0.
 Expected: the JSON value is `(default)` in grey and the key is Changed in JSON. After Apply, `FlickerSpeed` shows the variable's
 default (1.0), with no reset arrow.
 
-**3.8 Overwrite JSON**
+**3.8 Keeping every asset value**
 
-1. Change the JSON to `"FlickerSpeed": "11.0"`, Refresh, select the asset and press **Overwrite JSON**.
+1. Change the JSON to `"FlickerSpeed": "11.0"`, Refresh, select the asset and press **All from Asset**, then **Apply**.
 
-Expected: the file is rewritten with the asset's values, the asset leaves the tab, and the asset is **not** dirty.
+Expected: the file is rewritten with the asset's values at once, the asset leaves the tab, and the asset is **not** dirty.
+**Overwrite JSON** is not shown (it is only for an unreadable file, see 4.6).
 
-**3.9 Apply with nothing ticked**
+**3.9 Apply and Save with nothing to apply**
 
-1. As 3.8, but press **Tick None**, then **Apply JSON**.
+1. As 3.8, but press **All from Asset**, then **Apply and Save**.
 
-Expected: the same result as Overwrite JSON. The asset is not dirty, and the file is rewritten at once.
+Expected: the toast "Wrote the JSON of BP_SyncLamp; the asset did not change." The file is rewritten, and the `.uasset` is **not**
+saved (its timestamp does not change).
 
 **3.10 Saving a pending asset**
 
@@ -269,8 +280,8 @@ Expected:
 Expected:
 
 - The save-skipped toast appears and the JSON file still has your edit.
-- The asset is listed with **every** differing key as Conflict, all unticked.
-- The detail line says "every key is marked as a conflict".
+- The asset is listed with **every** differing key as Conflict, all **Choose**, and the counter shows how many.
+- The detail line says "every key is a conflict".
 
 **3.12 Save guard when values match**
 
@@ -279,36 +290,36 @@ Expected:
 Expected: nothing is listed (the values are the same), and the cache records the new hash. The next save of the asset rewrites the
 file in canonical form.
 
-**3.13 Unknown key, unticked**
+**3.13 Unknown key, kept from the asset**
 
 1. Add `"Nope": "1"` to `defaults` in the JSON. Refresh.
 
 Expected: `Nope` is listed (JSON `1`, Asset `(default)`).
 
-2. Untick it and press Apply JSON.
+2. Click its asset value `(default)` (Use: Asset) and press **Apply**.
 
 Expected: the asset is applied. Since nothing changed, the JSON is rewritten at once without `Nope`.
 
 **3.14 JSON changes between Apply and Save**
 
 1. Change `FlickerSpeed` in the JSON to `"10.0"` and `Light.Intensity` to `"8100.0"`. Refresh.
-2. Untick `Light.Intensity` and press **Apply JSON**. Do not save.
+2. Click the asset value of `Light.Intensity` (Use: Asset) and press **Apply**. Do not save.
 3. Change `Tint` in the JSON (e.g. `"(R=0.0,G=1.0,B=0.0,A=1.0)"`). Do **not** Refresh. Save the Blueprint.
 
 Expected:
 
 - The toast "Saved BP_SyncLamp, but did not write its JSON: the JSON changed again after you reviewed it", with Review.
 - The JSON still has your `Tint` edit.
-- The asset is listed with `Tint` Changed in **JSON** (ticked) and `Light.Intensity` Changed in **Asset** (unticked: the value you
-  kept). `FlickerSpeed` is not listed.
+- The asset is listed with `Tint` Changed in **JSON** (Use JSON) and `Light.Intensity` Changed in **Asset** (Use Asset: the value
+  you kept). `FlickerSpeed` is not listed.
 
-4. Press **Apply JSON** and save.
+4. Press **Apply and Save**.
 
 Expected: the JSON has the new `Tint`, `FlickerSpeed` `10.000000`, and the old `Light.Intensity`.
 
 **3.15 Refresh after Apply**
 
-1. Change `FlickerSpeed` in the JSON to `"11.0"` and `Light.Intensity` to `"8200.0"`. Refresh. Untick `Light.Intensity`, Apply JSON.
+1. Change `FlickerSpeed` in the JSON to `"11.0"` and `Light.Intensity` to `"8200.0"`. Refresh. Click the asset value of `Light.Intensity`, then **Apply**.
    Do not save.
 2. Press **Refresh**.
 
@@ -318,22 +329,72 @@ Expected: the asset is not listed again (no every-key Conflict list).
 
 Expected: listed as in 3.14 step 3, with the normal pending toast. Saving now does not write the JSON.
 
+**3.16 Choosing several keys at once**
+
+1. Change `FlickerSpeed`, `Light.Intensity` and `Tint` in the JSON. In the Blueprint, change all three to other values (do not
+   save). Refresh.
+
+Expected: three Conflicts, "3 conflicts to choose".
+
+2. Ctrl+click `FlickerSpeed` and `Tint` on their key names, right-click, and choose **Use JSON**.
+
+Expected: the menu is headed "2 keys". Both use JSON; the counter reads "1 conflict to choose".
+
+3. Right-click `Light.Intensity` alone and choose **Use Asset**.
+
+Expected: the counter disappears.
+
+4. Select another asset in the left list (or Refresh), then come back.
+
+Expected: the three choices are still there.
+
+5. In the Blueprint, change `Tint` again (do not save). Refresh.
+
+Expected: `Tint` is back to **Choose** (its asset value changed, so the choice was dropped). The other two keep theirs.
+
+6. Select `Tint`, right-click and choose **Reset**: nothing changes (it is a conflict, so its default is Choose). Choose it, press
+   **Apply and Save**.
+
+Expected: the toast "Applied the JSON to BP_SyncLamp and saved it." The asset is not dirty, the JSON has the chosen values, and
+the asset leaves the tab.
+
+**3.17 Apply and Save, then Ctrl+Z**
+
+1. Change `FlickerSpeed` in the JSON to `"14.0"`. Refresh, press **Apply and Save**.
+2. Press Ctrl+Z.
+
+Expected: `FlickerSpeed` goes back and the asset is dirty, but there is **no** undo toast and the asset is **not** listed: the JSON
+already has `14.000000`, and this is an ordinary edit now.
+
+3. Save.
+
+Expected: the JSON gets the old value back (shown in git as a change).
+
+**3.18 Apply and Save, checkout declined** (only with source control)
+
+1. With source control connected and the `.uasset` not checked out, change the JSON, Refresh, press **Apply and Save**, and decline
+   the checkout.
+
+Expected: the warning toast "Applied the JSON to BP_SyncLamp, but it was not saved. …". The asset is dirty and not listed, as after
+**Apply**. Saving it later writes the JSON.
+
 ## 4. Bad files
 
-Each of these leaves the asset listed and changes nothing in it. After each one, restore the file (or use **Overwrite JSON**).
+Each of these leaves the asset listed and changes nothing in it. After each one, restore the file (or use **All from Asset** and
+**Apply**, or **Overwrite JSON** for an unreadable file).
 
 | # | Change in `BP_SyncLamp.json` | Expected |
 |---|---|---|
-| 4.1 | `"FlickerSpeed": "abc"` | Listed as a normal key. **Apply JSON** shows "Cannot apply the JSON of BP_SyncLamp; nothing was changed for them". The Output Log names the key. The asset stays listed. |
-| 4.2 | Add `"Nope": "1"` and leave it ticked | Apply fails as in 4.1: "unknown property". |
+| 4.1 | `"FlickerSpeed": "abc"` | Listed as a normal key. **Apply** shows "Cannot apply the JSON of BP_SyncLamp; nothing was changed for them". The Output Log names the key. The asset stays listed. |
+| 4.2 | Add `"Nope": "1"` and leave it on JSON | Apply fails as in 4.1: "unknown property". |
 | 4.3 | Rename `FlickerSpeed` to `flickerSpeed` with a different value | Apply fails: "unknown property (did you mean 'FlickerSpeed'?)". With the **same** value it is not listed at all (key comparison ignores case); the commandlet's `-verify` reports it (12.2). |
 | 4.4 | `"Tint": "(X=1)"` | Apply fails: the struct field is unknown. |
 | 4.5 | `"FlickerSpeed": "2.0 extra"` | Apply fails: unexpected text after the value. |
-| 4.6 | Remove a closing `}` | Status "Cannot read the JSON" (orange). The detail line shows the parse error. Apply JSON and Tick All/None are disabled; Overwrite JSON works. |
+| 4.6 | Remove a closing `}` | Status "Cannot read the JSON" (orange). The detail line shows the parse error. No keys are listed; Apply, Apply and Save and the All/Reset buttons are disabled. **Overwrite JSON** is shown and works. |
 | 4.7 | `"schema": 1` | "Cannot read the JSON", and the error says the file is from an older version of the plugin. |
 | 4.8 | `"FlickerSpeed": 4` (a number) | "Cannot read the JSON": the value must be a string. |
 | 4.9 | Add a top-level field `"reset": []` | "Cannot read the JSON": unknown field. |
-| 4.10 | Add `"components": { "Nope": { "Intensity": "1" } }`, ticked | Apply fails: unknown component. |
+| 4.10 | Add `"components": { "Nope": { "Intensity": "1" } }`, on JSON | Apply fails: unknown component. |
 | 4.11 | Git conflict markers (`<<<<<<<`) in the file | "Cannot read the JSON". |
 
 **4.12 JSON with no asset**
@@ -389,7 +450,7 @@ Expected: applied automatically, as in 5.1.
 
 1. Change `Damage` in the **class** `PDA_SyncItem.json` (not the asset), to a value `DA_SyncItem` does not override. Refresh.
 
-Expected: `PDA_SyncItem` is listed (Blueprints are not Two Way). After Apply JSON, `DA_SyncItem` follows if it does not override
+Expected: `PDA_SyncItem` is listed (Blueprints are not Two Way). After **Apply**, `DA_SyncItem` follows if it does not override
 `Damage`, and keeps its own value if it does.
 
 **5.6 Undo of an automatic apply**
@@ -422,9 +483,10 @@ Expected:
 
 - Start-up takes a little longer, because every synced asset with a JSON file is loaded once.
 - Assets whose JSON matches are not listed, and `cache.json` is rebuilt with their hashes.
-- Both changed assets are listed with every differing key as Conflict and unticked. `DA_SyncItem` is **not** applied
+- Both changed assets are listed with every differing key as Conflict and **Choose**. `DA_SyncItem` is **not** applied
   automatically.
-- The detail line says it is unknown which side changed each key, so every key is marked as a conflict.
+- The detail line says it is unknown which side changed each key, so every key is a conflict.
+- **All from JSON** sets every key to JSON and the counter disappears; **Reset** brings back **Choose** for all of them.
 
 **6.2 Base deleted while pending**
 
@@ -439,7 +501,7 @@ Expected: every key becomes Conflict.
 1. Open `L_SyncTest`. Place one `BP_SyncLamp` (A), one more `BP_SyncLamp` (B) with `FlickerSpeed` set to 99 in its Details, and
    one `BP_SyncLampChild` (C). Save the level.
 2. Reset `FlickerSpeed` on `BP_SyncLampChild` (from test 2.4) and save it.
-3. In `BP_SyncLamp.json`, change `FlickerSpeed` to `"13.0"`. Refresh, then Apply JSON.
+3. In `BP_SyncLamp.json`, change `FlickerSpeed` to `"13.0"`. Refresh, then **Apply**.
 
 Expected:
 
@@ -450,7 +512,7 @@ Expected:
 
 **7.2 Inherited component override**
 
-1. In `BP_SyncLampChild.json`, set `components.Light.Intensity` to `"123.0"`. Refresh, then Apply JSON.
+1. In `BP_SyncLampChild.json`, set `components.Light.Intensity` to `"123.0"`. Refresh, then **Apply**.
 
 Expected: in the child's Components panel, `Light` has Intensity 123. The parent is unchanged.
 
@@ -473,7 +535,7 @@ Expected: the JSON has `widgets.Title` with `RenderOpacity` and `Text` (as `NSLO
 
 Expected: the keys are `Title.RenderOpacity` and `Title.Slot.ZOrder`.
 
-2. Apply JSON.
+2. Press **Apply**.
 
 Expected: the Designer shows the new values straight away. Play In Editor shows them too, since PIE compiles the dirty Widget
 Blueprint first. Add the widget to the viewport from a level Blueprint to see it.
@@ -501,7 +563,7 @@ Expected:
 1. Rename an asset, then change a value and save it, before any other save.
 
 Expected: the save may be reported as "did not write its JSON", and the asset listed with every key as Conflict, although nothing
-came from outside. **Overwrite JSON** resolves it. Report what you see. This case is not confirmed yet.
+came from outside. **All from Asset** and **Apply** resolve it. Report what you see. This case is not confirmed yet.
 
 **9.3 Move**
 
@@ -552,7 +614,7 @@ Expected: the JSON is not written on save, and the JSON change is not listed.
 2. Set the mode back to Write JSON Only and Refresh.
 
 Expected: the asset is listed, because the JSON and the asset now differ. Both the JSON and the `.uasset` changed since the last
-sync, so every key shows as **Conflict** and nothing is ticked. Decide each key, or use Overwrite JSON.
+sync, so every key shows as **Conflict** and **Choose**. Choose each key, or use **All from Asset** and **Apply**.
 
 3. Repeat step 1, but this time do not change the JSON. Set the mode back and Refresh.
 
@@ -682,22 +744,22 @@ stash` / `git checkout -- <file>` on the `.uasset` alone does the same.
 Expected:
 
 - `BP_SyncLamp` is listed as "1 keys, JSON out of date" (not orange).
-- `FlickerSpeed` is Changed in **Asset**, not ticked. The JSON value is 4, the asset value is the old one.
+- `FlickerSpeed` is Changed in **Asset**, Use Asset. The JSON value is 4, the asset value is the old one.
 - The detail line says the JSON has no changes of its own.
 
 4. Open `BP_SyncLamp` and press **Save** in the Blueprint editor toolbar (it saves even when nothing changed).
 
 Expected: the JSON is written with the asset's value, the asset leaves the list, and there is **no** "did not write its JSON" toast.
 
-**13.2 Out of date, resolved with Overwrite JSON**
+**13.2 Out of date, resolved with Apply**
 
-1. Repeat 13.1 steps 1–3. Press **Overwrite JSON**.
+1. Repeat 13.1 steps 1–3. Press **Apply** (every key already uses the asset).
 
 Expected: the JSON gets the asset's value and the asset leaves the list.
 
 **13.3 Out of date, reverting the asset's change**
 
-1. Repeat 13.1 steps 1–3. Tick `FlickerSpeed` and press **Apply JSON**. Save.
+1. Repeat 13.1 steps 1–3. Click the JSON value of `FlickerSpeed` and press **Apply and Save**.
 
 Expected: the asset gets 4 from the JSON (the old `.uasset` change is reverted), and saving writes the JSON unchanged.
 
@@ -712,7 +774,7 @@ in `cache.json` (the `asset` field changes). A second start loads nothing.
 
 1. Repeat 13.1 steps 1–3, but before starting in step 3, also change `bStartOn` in `BP_SyncLamp.json`.
 
-Expected: listed with every differing key (`FlickerSpeed`, `bStartOn`) as **Conflict**, nothing ticked.
+Expected: listed with every differing key (`FlickerSpeed`, `bStartOn`) as **Conflict**, all **Choose**.
 
 **13.6 Data asset out of date (Two Way)**
 
@@ -737,11 +799,11 @@ list `FlickerSpeed` (it now comes from the new parent).
 
 Expected:
 
-- `BP_SyncLampChild` is listed as "parent differs" (orange). The detail line names both parents and suggests Overwrite JSON.
-- Few or no keys differ, because a reparent keeps the child's own overrides. Any that do are Changed in **Asset**, not ticked.
+- `BP_SyncLampChild` is listed as "parent differs" (orange). The detail line names both parents and suggests All from Asset, then Apply.
+- Few or no keys differ, because a reparent keeps the child's own overrides. Any that do are Changed in **Asset**, Use Asset.
 - The Output Log has a warning naming both parents.
 
-4. Press **Overwrite JSON**.
+4. Press **Apply**.
 
 Expected: the JSON's `"parent"` is `BP_SyncLampAlt`'s class again and the asset leaves the list.
 
@@ -750,12 +812,12 @@ Expected: the JSON's `"parent"` is `BP_SyncLampAlt`'s class again and the asset 
 1. Keep a copy of `BP_SyncLampChild.json`. Reparent `BP_SyncLampChild` to `BP_SyncLamp` and save. Close the editor.
 2. Copy the old JSON back (it names `BP_SyncLampAlt`), and change a value in it. Start.
 
-Expected: listed as "parent differs", every differing key a **Conflict**, nothing ticked. With a data asset in Two Way mode (change
+Expected: listed as "parent differs", every differing key a **Conflict**, all **Choose**. With a data asset in Two Way mode (change
 the `"parent"` of `DA_SyncItem.json` to another class path), nothing is applied automatically.
 
 3. Edit only `"parent"` in a JSON so it names another class, without changing values. Refresh.
 
-Expected: listed as "0 keys, parent differs". Apply JSON or Overwrite JSON writes the asset's real parent back.
+Expected: listed as "0 keys, parent differs". **Apply** is enabled (nothing to choose) and writes the asset's real parent back.
 
 **13.10 Cache from an older plugin version**
 

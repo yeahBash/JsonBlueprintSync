@@ -75,10 +75,11 @@ public:
 	bool GetPendingView(const FString& PackageName, FPendingView& OutView) const;
 
 	/**
-	 * Sets the given keys to their JSON values (one undo step; not saved). Keys that are not given keep the asset's value, and saving
-	 * the asset writes them to the JSON. Resolves the pending state.
+	 * Sets the given keys to their JSON values (one undo step). Keys that are not given keep the asset's value, and saving the asset
+	 * writes them to the JSON. Resolves the pending state. bSave: then saves the asset if it is dirty (which writes the JSON); if it
+	 * is not, the JSON is written without a save.
 	 */
-	bool ApplyJson(const FString& PackageName, const TArray<FString>& Keys);
+	bool ApplyJson(const FString& PackageName, const TArray<FString>& Keys, bool bSave = false);
 
 	/** Writes the asset's current values to its JSON file, discarding the JSON's changes. Resolves the pending state. */
 	bool OverwriteJson(const FString& PackageName);

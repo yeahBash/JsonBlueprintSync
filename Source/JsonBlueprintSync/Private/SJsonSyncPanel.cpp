@@ -3,13 +3,14 @@
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Editor.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "InputCoreTypes.h"
 #include "JsonBlueprintSyncSubsystem.h"
 #include "Misc/PackageName.h"
 #include "Styling/AppStyle.h"
 #include "Styling/StyleColors.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "Widgets/Input/SButton.h"
-#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SSplitter.h"
@@ -24,14 +25,16 @@ using namespace JsonBlueprintSync;
 
 namespace
 {
+	using EKeySource = SJsonSyncPanel::EKeySource;
+
 	const FName ColumnAsset(TEXT("Asset"));
 	const FName ColumnKind(TEXT("Kind"));
 	const FName ColumnStatus(TEXT("Status"));
-	const FName ColumnTake(TEXT("Take"));
 	const FName ColumnKey(TEXT("Key"));
 	const FName ColumnJson(TEXT("Json"));
 	const FName ColumnValue(TEXT("Value"));
 	const FName ColumnChange(TEXT("Change"));
+	const FName ColumnUse(TEXT("Use"));
 
 	FText ValueText(const TOptional<FString>& Value)
 	{
@@ -52,10 +55,36 @@ namespace
 	{
 		switch (Change)
 		{
-		case EKeyChange::Json: return LOCTEXT("ChangedJsonTip", "Changed in the JSON; the asset still has the old value. Ticked: Apply JSON takes the JSON value.");
-		case EKeyChange::Asset: return LOCTEXT("ChangedAssetTip", "Changed in the asset; the JSON still has the old value. Unticked: the asset keeps its value and the next save writes it to the JSON.");
-		default: return LOCTEXT("ChangedBothTip", "Changed on both sides, or it is unknown which side changed it. Unticked: tick it to take the JSON value.");
+		case EKeyChange::Json: return LOCTEXT("ChangedJsonTip", "Changed in the JSON; the asset still has the old value. Uses the JSON unless you choose otherwise.");
+		case EKeyChange::Asset: return LOCTEXT("ChangedAssetTip", "Changed in the asset; the JSON still has the old value. Keeps the asset's value unless you choose otherwise; saving the asset writes it to the JSON.");
+		default: return LOCTEXT("ChangedBothTip", "Changed on both sides, or it is unknown which side changed it. Choose the JSON or the asset value before applying.");
 		}
+	}
+
+	FText SourceText(EKeySource Source)
+	{
+		switch (Source)
+		{
+		case EKeySource::Json: return LOCTEXT("UseJsonValue", "JSON");
+		case EKeySource::Asset: return LOCTEXT("UseAssetValue", "Asset");
+		default: return LOCTEXT("UseNone", "Choose");
+		}
+	}
+
+	FText SourceTooltip(EKeySource Source)
+	{
+		switch (Source)
+		{
+		case EKeySource::Json: return LOCTEXT("UseJsonValueTip", "Apply sets this key to the JSON value.");
+		case EKeySource::Asset: return LOCTEXT("UseAssetValueTip", "The asset keeps its value; saving the asset writes it to the JSON.");
+		default: return LOCTEXT("UseNoneTip", "Not chosen yet: click the JSON or the asset value, or right-click the key.");
+		}
+	}
+
+	/** Background of the value a key uses. */
+	FSlateColor ChosenColor()
+	{
+		return FStyleColors::Primary.GetSpecifiedColor().CopyWithNewOpacity(0.45f);
 	}
 
 	class SAssetRow : public SMultiColumnTableRow<TSharedPtr<SJsonSyncPanel::FAssetItem>>
@@ -108,35 +137,41 @@ namespace
 	class SKeyRow : public SMultiColumnTableRow<TSharedPtr<SJsonSyncPanel::FKeyItem>>
 	{
 	public:
+		using FOnChoose = TFunction<void(SJsonSyncPanel::FKeyItem&, EKeySource)>;
+
 		SLATE_BEGIN_ARGS(SKeyRow) {}
 		SLATE_END_ARGS()
 
-		void Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& Owner, TSharedPtr<SJsonSyncPanel::FKeyItem> InItem,
-			TFunction<void(const FString&, bool)> InOnTick)
+		void Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& Owner, TSharedPtr<SJsonSyncPanel::FKeyItem> InItem, FOnChoose InOnChoose)
 		{
 			Item = InItem;
-			OnTick = MoveTemp(InOnTick);
+			OnChoose = MoveTemp(InOnChoose);
 			SMultiColumnTableRow<TSharedPtr<SJsonSyncPanel::FKeyItem>>::Construct(FSuperRowType::FArguments(), Owner);
 		}
 
 		virtual TSharedRef<SWidget> GenerateWidgetForColumn(const FName& Column) override
 		{
 			const FKeyDiff& Diff = Item->Diff;
-			if (Column == ColumnTake)
+			if (Column == ColumnJson)
 			{
+				return MakeValueCell(EKeySource::Json, Diff.JsonValue);
+			}
+			if (Column == ColumnValue)
+			{
+				return MakeValueCell(EKeySource::Asset, Diff.AssetValue);
+			}
+			if (Column == ColumnUse)
+			{
+				const TSharedPtr<SJsonSyncPanel::FKeyItem> Captured = Item;
 				return SNew(SBox)
-					.HAlign(HAlign_Center)
+					.Padding(FMargin(4.0f, 2.0f))
 					[
-						SNew(SCheckBox)
-						.ToolTipText(LOCTEXT("TakeTip", "Ticked: Apply JSON sets this key to the JSON value. Unticked: the asset keeps its value."))
-						.IsChecked_Lambda([Item = Item]() { return Item->bTake ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-						.OnCheckStateChanged_Lambda([this](ECheckBoxState State)
+						SNew(STextBlock)
+						.Text_Lambda([Captured]() { return SourceText(Captured->Source); })
+						.ToolTipText_Lambda([Captured]() { return SourceTooltip(Captured->Source); })
+						.ColorAndOpacity_Lambda([Captured]()
 						{
-							Item->bTake = State == ECheckBoxState::Checked;
-							if (OnTick)
-							{
-								OnTick(Item->Diff.Key, Item->bTake);
-							}
+							return Captured->Source == EKeySource::None ? FStyleColors::Warning : FSlateColor::UseForeground();
 						})
 					];
 			}
@@ -148,18 +183,6 @@ namespace
 			{
 				Text = FText::FromString(Diff.Key);
 				Tooltip = Text;
-			}
-			else if (Column == ColumnJson)
-			{
-				Text = ValueText(Diff.JsonValue);
-				Tooltip = Text;
-				Color = Diff.JsonValue ? FSlateColor::UseForeground() : FSlateColor::UseSubduedForeground();
-			}
-			else if (Column == ColumnValue)
-			{
-				Text = ValueText(Diff.AssetValue);
-				Tooltip = Text;
-				Color = Diff.AssetValue ? FSlateColor::UseForeground() : FSlateColor::UseSubduedForeground();
 			}
 			else
 			{
@@ -181,9 +204,57 @@ namespace
 		}
 
 	private:
+		/** A value of one side: highlighted if the key uses it, dimmed if it uses the other side. A click makes the key use it. */
+		TSharedRef<SWidget> MakeValueCell(EKeySource Side, const TOptional<FString>& Value)
+		{
+			const TSharedPtr<SJsonSyncPanel::FKeyItem> Captured = Item;
+			const FOnChoose Choose = OnChoose;
+			const bool bDefault = !Value.IsSet();
+			const FText Text = ValueText(Value);
+			const FText Tooltip = FText::Format(Side == EKeySource::Json
+				? LOCTEXT("JsonCellTip", "{0}\n\nClick to use the JSON value.")
+				: LOCTEXT("AssetCellTip", "{0}\n\nClick to keep the asset's value."), Text);
+			return SNew(SBorder)
+				.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
+				.BorderBackgroundColor_Lambda([Captured, Side]()
+				{
+					return Captured->Source == Side ? ChosenColor() : FSlateColor(FLinearColor::Transparent);
+				})
+				.Padding(FMargin(4.0f, 2.0f))
+				.ToolTipText(Tooltip)
+				.OnMouseButtonDown_Lambda([Captured, Choose, Side](const FGeometry&, const FPointerEvent& Event)
+				{
+					if (Event.GetEffectingButton() == EKeys::LeftMouseButton && Choose)
+					{
+						Choose(*Captured, Side);
+					}
+					// Unhandled, so that the row still updates the selection.
+					return FReply::Unhandled();
+				})
+				[
+					SNew(STextBlock)
+					.Text(Text)
+					.ColorAndOpacity_Lambda([Captured, Side, bDefault]()
+					{
+						const bool bOtherSide = Captured->Source != EKeySource::None && Captured->Source != Side;
+						return bOtherSide || bDefault ? FSlateColor::UseSubduedForeground() : FSlateColor::UseForeground();
+					})
+				];
+		}
+
 		TSharedPtr<SJsonSyncPanel::FKeyItem> Item;
-		TFunction<void(const FString&, bool)> OnTick;
+		FOnChoose OnChoose;
 	};
+}
+
+SJsonSyncPanel::EKeySource SJsonSyncPanel::GetDefaultSource(const FKeyDiff& Diff)
+{
+	switch (Diff.Change)
+	{
+	case EKeyChange::Json: return EKeySource::Json;
+	case EKeyChange::Asset: return EKeySource::Asset;
+	default: return EKeySource::None;
+	}
 }
 
 void SJsonSyncPanel::Construct(const FArguments& InArgs)
@@ -273,16 +344,17 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 					[
 						SAssignNew(KeyList, SListView<TSharedPtr<FKeyItem>>)
 						.ListItemsSource(&KeyItems)
-						.SelectionMode(ESelectionMode::None)
+						.SelectionMode(ESelectionMode::Multi)
 						.OnGenerateRow(this, &SJsonSyncPanel::GenerateKeyRow)
+						.OnContextMenuOpening(this, &SJsonSyncPanel::OnKeyContextMenuOpening)
 						.HeaderRow
 						(
 							SNew(SHeaderRow)
-							+ SHeaderRow::Column(ColumnTake).DefaultLabel(LOCTEXT("ColumnTake", "Use JSON")).FixedWidth(72.0f)
 							+ SHeaderRow::Column(ColumnKey).DefaultLabel(LOCTEXT("ColumnKey", "Key")).FillWidth(0.25f)
 							+ SHeaderRow::Column(ColumnJson).DefaultLabel(LOCTEXT("ColumnJson", "JSON value")).FillWidth(0.3f)
 							+ SHeaderRow::Column(ColumnValue).DefaultLabel(LOCTEXT("ColumnValue", "Asset value")).FillWidth(0.3f)
-							+ SHeaderRow::Column(ColumnChange).DefaultLabel(LOCTEXT("ColumnChange", "Changed in")).FillWidth(0.15f)
+							+ SHeaderRow::Column(ColumnChange).DefaultLabel(LOCTEXT("ColumnChange", "Changed in")).FillWidth(0.12f)
+							+ SHeaderRow::Column(ColumnUse).DefaultLabel(LOCTEXT("ColumnUse", "Use")).FixedWidth(64.0f)
 						)
 					]
 				]
@@ -297,23 +369,39 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 					.Padding(0.0f, 0.0f, 4.0f, 0.0f)
 					[
 						SNew(SButton)
-						.Text(LOCTEXT("TickAll", "Tick All"))
-						.IsEnabled(this, &SJsonSyncPanel::CanApply)
-						.OnClicked(this, &SJsonSyncPanel::OnSetAllClicked, true)
+						.Text(LOCTEXT("AllJson", "All from JSON"))
+						.ToolTipText(LOCTEXT("AllJsonTip", "Use the JSON value for every key."))
+						.IsEnabled(this, &SJsonSyncPanel::HasKeys)
+						.OnClicked(this, &SJsonSyncPanel::OnSetAllClicked, EKeySource::Json)
 					]
 					+ SHorizontalBox::Slot()
 					.AutoWidth()
 					.Padding(0.0f, 0.0f, 4.0f, 0.0f)
 					[
 						SNew(SButton)
-						.Text(LOCTEXT("TickNone", "Tick None"))
-						.IsEnabled(this, &SJsonSyncPanel::CanApply)
-						.OnClicked(this, &SJsonSyncPanel::OnSetAllClicked, false)
+						.Text(LOCTEXT("AllAsset", "All from Asset"))
+						.ToolTipText(LOCTEXT("AllAssetTip", "Keep the asset's value for every key, discarding the JSON's changes."))
+						.IsEnabled(this, &SJsonSyncPanel::HasKeys)
+						.OnClicked(this, &SJsonSyncPanel::OnSetAllClicked, EKeySource::Asset)
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.Padding(0.0f, 0.0f, 4.0f, 0.0f)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("ResetChoices", "Reset"))
+						.ToolTipText(LOCTEXT("ResetChoicesTip", "Undo your choices: keys changed on one side use that side, conflicts are not chosen."))
+						.IsEnabled(this, &SJsonSyncPanel::HasKeys)
+						.OnClicked(this, &SJsonSyncPanel::OnSetAllClicked, EKeySource::None)
 					]
 					+ SHorizontalBox::Slot()
 					.FillWidth(1.0f)
+					.VAlign(VAlign_Center)
+					.Padding(8.0f, 0.0f)
 					[
-						SNullWidget::NullWidget
+						SNew(STextBlock)
+						.Text(this, &SJsonSyncPanel::GetUnresolvedText)
+						.ColorAndOpacity(FStyleColors::Warning)
 					]
 					+ SHorizontalBox::Slot()
 					.AutoWidth()
@@ -330,8 +418,8 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 					[
 						SNew(SButton)
 						.Text(LOCTEXT("Overwrite", "Overwrite JSON"))
-						.ToolTipText(LOCTEXT("OverwriteTip", "Discard the JSON's changes: write the asset's current values to the JSON file."))
-						.IsEnabled(this, &SJsonSyncPanel::HasSelection)
+						.ToolTipText(LOCTEXT("OverwriteTip", "Discard the unreadable JSON: write the asset's current values to the JSON file."))
+						.Visibility_Lambda([this]() { return HasSelection() && !SelectedError.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed; })
 						.OnClicked(this, &SJsonSyncPanel::OnOverwriteClicked)
 					]
 					+ SHorizontalBox::Slot()
@@ -339,11 +427,21 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 					.Padding(4.0f, 0.0f, 0.0f, 0.0f)
 					[
 						SNew(SButton)
-						.ButtonStyle(FAppStyle::Get(), "PrimaryButton")
-						.Text(LOCTEXT("Apply", "Apply JSON"))
-						.ToolTipText(LOCTEXT("ApplyTip", "Set the ticked keys to their JSON values (one undo step; the asset is not saved). Unticked keys keep the asset's value; saving the asset writes them to the JSON."))
+						.Text(LOCTEXT("Apply", "Apply"))
+						.ToolTipText(LOCTEXT("ApplyTip", "Set the keys that use JSON to their JSON values (one undo step; the asset is not saved). Keys that use the asset keep its value; saving the asset writes them to the JSON. If nothing in the asset changes, the JSON is written now."))
 						.IsEnabled(this, &SJsonSyncPanel::CanApply)
-						.OnClicked(this, &SJsonSyncPanel::OnApplyClicked)
+						.OnClicked(this, &SJsonSyncPanel::OnApplyClicked, false)
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.Padding(4.0f, 0.0f, 0.0f, 0.0f)
+					[
+						SNew(SButton)
+						.ButtonStyle(FAppStyle::Get(), "PrimaryButton")
+						.Text(LOCTEXT("ApplySave", "Apply and Save"))
+						.ToolTipText(LOCTEXT("ApplySaveTip", "Apply, then save the asset, which writes its JSON with the chosen values. Ctrl+Z still reverts the apply."))
+						.IsEnabled(this, &SJsonSyncPanel::CanApply)
+						.OnClicked(this, &SJsonSyncPanel::OnApplyClicked, true)
 					]
 				]
 			]
@@ -373,6 +471,7 @@ void SJsonSyncPanel::Refresh()
 
 	AssetItems.Reset();
 	TSharedPtr<FAssetItem> ToSelect;
+	TSet<FString> Listed;
 	if (Owner)
 	{
 		for (const FString& PackageName : Owner->GetPendingPackages())
@@ -409,21 +508,26 @@ void SJsonSyncPanel::Refresh()
 				Item->Status = FText::Format(LOCTEXT("StatusChanged", "{0} keys"), FText::AsNumber(View.Keys.Num()));
 			}
 			AssetItems.Add(Item);
+			Listed.Add(PackageName);
 			if (PackageName == SelectedPackage)
 			{
 				ToSelect = Item;
 			}
 		}
 	}
+	// Choices for assets that are no longer listed (applied, or the JSON matches again) are of no use.
+	for (auto It = Choices.CreateIterator(); It; ++It)
+	{
+		if (!Listed.Contains(It.Key()))
+		{
+			It.RemoveCurrent();
+		}
+	}
 	if (!ToSelect && AssetItems.Num() > 0)
 	{
 		ToSelect = AssetItems[0];
 	}
-	if (!ToSelect || ToSelect->PackageName != SelectedPackage)
-	{
-		SelectedPackage = ToSelect ? ToSelect->PackageName : FString();
-		Ticks.Reset();
-	}
+	SelectedPackage = ToSelect ? ToSelect->PackageName : FString();
 	AssetList->RequestListRefresh();
 	if (ToSelect)
 	{
@@ -454,15 +558,30 @@ void SJsonSyncPanel::RefreshKeys()
 		bSelectedOutOfDate = View.IsJsonOutOfDate();
 		SelectedJsonParent = View.JsonParent;
 		SelectedAssetParent = View.AssetParent;
+
+		TMap<FString, FKeyChoice> OldChoices;
+		Choices.RemoveAndCopyValue(SelectedPackage, OldChoices);
+		TMap<FString, FKeyChoice> KeptChoices;
 		for (const FKeyDiff& Diff : View.Keys)
 		{
 			const TSharedPtr<FKeyItem> Item = MakeShared<FKeyItem>();
 			Item->Diff = Diff;
-			const bool* Tick = Ticks.Find(Diff.Key);
-			Item->bTake = Tick ? *Tick : Diff.TakeJsonByDefault();
+			Item->Source = GetDefaultSource(Diff);
+			// A choice was made for particular values: if the JSON or the asset changed the key since, it has to be made again.
+			const FKeyChoice* Choice = OldChoices.Find(Diff.Key);
+			if (Choice && Choice->JsonValue == Diff.JsonValue && Choice->AssetValue == Diff.AssetValue)
+			{
+				Item->Source = Choice->Source;
+				KeptChoices.Add(Diff.Key, *Choice);
+			}
 			KeyItems.Add(Item);
 		}
+		if (KeptChoices.Num() > 0)
+		{
+			Choices.Add(SelectedPackage, MoveTemp(KeptChoices));
+		}
 	}
+	KeyList->ClearSelection();
 	KeyList->RequestListRefresh();
 }
 
@@ -474,11 +593,11 @@ TSharedRef<ITableRow> SJsonSyncPanel::GenerateAssetRow(TSharedPtr<FAssetItem> It
 TSharedRef<ITableRow> SJsonSyncPanel::GenerateKeyRow(TSharedPtr<FKeyItem> Item, const TSharedRef<STableViewBase>& Owner)
 {
 	TWeakPtr<SJsonSyncPanel> WeakThis = StaticCastSharedRef<SJsonSyncPanel>(AsShared());
-	return SNew(SKeyRow, Owner, Item, [WeakThis](const FString& Key, bool bTake)
+	return SNew(SKeyRow, Owner, Item, [WeakThis](FKeyItem& Key, EKeySource Source)
 	{
 		if (const TSharedPtr<SJsonSyncPanel> Panel = WeakThis.Pin())
 		{
-			Panel->Ticks.Add(Key, bTake);
+			Panel->SetSource(Key, Source);
 		}
 	});
 }
@@ -489,12 +608,7 @@ void SJsonSyncPanel::OnAssetSelected(TSharedPtr<FAssetItem> Item, ESelectInfo::T
 	{
 		return;
 	}
-	const FString PackageName = Item ? Item->PackageName : FString();
-	if (PackageName != SelectedPackage)
-	{
-		SelectedPackage = PackageName;
-		Ticks.Reset();
-	}
+	SelectedPackage = Item ? Item->PackageName : FString();
 	RefreshKeys();
 }
 
@@ -510,6 +624,51 @@ void SJsonSyncPanel::OnAssetDoubleClicked(TSharedPtr<FAssetItem> Item)
 	}
 }
 
+TSharedPtr<SWidget> SJsonSyncPanel::OnKeyContextMenuOpening()
+{
+	const int32 NumSelected = KeyList->GetNumItemsSelected();
+	if (NumSelected == 0)
+	{
+		return nullptr;
+	}
+	FMenuBuilder Menu(true, nullptr);
+	Menu.BeginSection(NAME_None, NumSelected == 1 ? LOCTEXT("MenuOneKey", "1 key") : FText::Format(LOCTEXT("MenuKeys", "{0} keys"), FText::AsNumber(NumSelected)));
+	Menu.AddMenuEntry(LOCTEXT("UseJson", "Use JSON"), LOCTEXT("UseJsonTip", "Apply sets the selected keys to their JSON values."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SJsonSyncPanel::SetSelectedSource, EKeySource::Json)));
+	Menu.AddMenuEntry(LOCTEXT("UseAsset", "Use Asset"), LOCTEXT("UseAssetTip", "The selected keys keep the asset's values; saving the asset writes them to the JSON."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SJsonSyncPanel::SetSelectedSource, EKeySource::Asset)));
+	Menu.AddMenuEntry(LOCTEXT("ResetChoice", "Reset"), LOCTEXT("ResetChoiceTip", "Undo your choice: a key changed on one side uses that side, a conflict is not chosen."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SJsonSyncPanel::SetSelectedSource, EKeySource::None)));
+	Menu.EndSection();
+	return Menu.MakeWidget();
+}
+
+void SJsonSyncPanel::SetSource(FKeyItem& Item, EKeySource Source)
+{
+	if (Source == EKeySource::None)
+	{
+		Item.Source = GetDefaultSource(Item.Diff);
+		if (TMap<FString, FKeyChoice>* PackageChoices = Choices.Find(SelectedPackage))
+		{
+			PackageChoices->Remove(Item.Diff.Key);
+		}
+		return;
+	}
+	Item.Source = Source;
+	FKeyChoice& Choice = Choices.FindOrAdd(SelectedPackage).FindOrAdd(Item.Diff.Key);
+	Choice.Source = Source;
+	Choice.JsonValue = Item.Diff.JsonValue;
+	Choice.AssetValue = Item.Diff.AssetValue;
+}
+
+void SJsonSyncPanel::SetSelectedSource(EKeySource Source)
+{
+	for (const TSharedPtr<FKeyItem>& Item : KeyList->GetSelectedItems())
+	{
+		SetSource(*Item, Source);
+	}
+}
+
 FText SJsonSyncPanel::GetSummaryText() const
 {
 	if (!Subsystem.IsValid())
@@ -520,7 +679,7 @@ FText SJsonSyncPanel::GetSummaryText() const
 	{
 		return LOCTEXT("NothingPending", "Every synced asset matches its JSON file.");
 	}
-	return FText::Format(LOCTEXT("Summary", "{0} asset(s) differ from their JSON file. Saving one of them does not write its JSON until you apply or overwrite it, unless the JSON is only out of date."),
+	return FText::Format(LOCTEXT("Summary", "{0} asset(s) differ from their JSON file. Saving one of them does not write its JSON until you apply it, unless the JSON is only out of date."),
 		FText::AsNumber(AssetItems.Num()));
 }
 
@@ -537,20 +696,41 @@ FText SJsonSyncPanel::GetDetailText() const
 	}
 	if (!SelectedJsonParent.IsEmpty())
 	{
-		return FText::Format(LOCTEXT("DetailParent", "{0}\nThe JSON was written for parent {1}, but the asset's parent is {2} (it was reparented, or one side is out of date). The JSON's values were relative to the old parent, so keys it does not list may differ as well. Usually: Overwrite JSON. Ticked keys take the JSON value."),
+		return FText::Format(LOCTEXT("DetailParent", "{0}\nThe JSON was written for parent {1}, but the asset's parent is {2} (it was reparented, or one side is out of date). The JSON's values were relative to the old parent, so keys it does not list may differ as well. Usually: All from Asset, then Apply."),
 			FText::FromString(SelectedPackage), FText::FromString(SelectedJsonParent), FText::FromString(SelectedAssetParent));
 	}
 	if (bSelectedOutOfDate)
 	{
-		return FText::Format(LOCTEXT("DetailOutOfDate", "{0}\nThe JSON has no changes of its own: the asset changed since its JSON was written (e.g. the .uasset was committed without it). Saving the asset or Overwrite JSON updates the JSON. Ticking a key reverts the asset's change."),
+		return FText::Format(LOCTEXT("DetailOutOfDate", "{0}\nThe JSON has no changes of its own: the asset changed since its JSON was written (e.g. the .uasset was committed without it). Apply writes the asset's values to the JSON; using the JSON for a key reverts the asset's change."),
 			FText::FromString(SelectedPackage));
 	}
 	if (!bSelectedHasBase)
 	{
-		return FText::Format(LOCTEXT("DetailNoBase", "{0}\nIt is unknown which side changed each key (both the JSON and the asset changed since the last sync, or the asset was never synced on this machine), so every key is marked as a conflict. Tick the keys to take from the JSON."),
+		return FText::Format(LOCTEXT("DetailNoBase", "{0}\nIt is unknown which side changed each key (both the JSON and the asset changed since the last sync, or the asset was never synced on this machine), so every key is a conflict. Choose a source for each: click its JSON or asset value, right-click selected keys, or use All from JSON / All from Asset."),
 			FText::FromString(SelectedPackage));
 	}
-	return FText::Format(LOCTEXT("Detail", "{0}\nTicked keys take the JSON value. Unticked keys keep the asset's value."), FText::FromString(SelectedPackage));
+	return FText::Format(LOCTEXT("Detail", "{0}\nChoose where each key's value comes from: click its JSON or asset value, or right-click selected keys. Keys changed on one side start with that side."),
+		FText::FromString(SelectedPackage));
+}
+
+int32 SJsonSyncPanel::GetUnresolvedCount() const
+{
+	int32 Count = 0;
+	for (const TSharedPtr<FKeyItem>& Item : KeyItems)
+	{
+		Count += Item->Source == EKeySource::None ? 1 : 0;
+	}
+	return Count;
+}
+
+FText SJsonSyncPanel::GetUnresolvedText() const
+{
+	const int32 Count = GetUnresolvedCount();
+	if (Count == 0)
+	{
+		return FText::GetEmpty();
+	}
+	return Count == 1 ? LOCTEXT("OneUnresolved", "1 conflict to choose") : FText::Format(LOCTEXT("Unresolved", "{0} conflicts to choose"), FText::AsNumber(Count));
 }
 
 bool SJsonSyncPanel::HasSelection() const
@@ -558,9 +738,14 @@ bool SJsonSyncPanel::HasSelection() const
 	return !SelectedPackage.IsEmpty() && Subsystem.IsValid();
 }
 
+bool SJsonSyncPanel::HasKeys() const
+{
+	return HasSelection() && SelectedError.IsEmpty() && KeyItems.Num() > 0;
+}
+
 bool SJsonSyncPanel::CanApply() const
 {
-	return HasSelection() && SelectedError.IsEmpty();
+	return HasSelection() && SelectedError.IsEmpty() && GetUnresolvedCount() == 0;
 }
 
 FReply SJsonSyncPanel::OnRefreshClicked()
@@ -573,19 +758,24 @@ FReply SJsonSyncPanel::OnRefreshClicked()
 	return FReply::Handled();
 }
 
-FReply SJsonSyncPanel::OnApplyClicked()
+FReply SJsonSyncPanel::OnApplyClicked(bool bSave)
 {
+	if (!CanApply())
+	{
+		return FReply::Handled();
+	}
 	TArray<FString> Keys;
 	for (const TSharedPtr<FKeyItem>& Item : KeyItems)
 	{
-		if (Item->bTake)
+		if (Item->Source == EKeySource::Json)
 		{
 			Keys.Add(Item->Diff.Key);
 		}
 	}
 	if (UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get())
 	{
-		Owner->ApplyJson(SelectedPackage, Keys);
+		const FString PackageName = SelectedPackage;
+		Owner->ApplyJson(PackageName, Keys, bSave);
 	}
 	return FReply::Handled();
 }
@@ -610,12 +800,11 @@ FReply SJsonSyncPanel::OnBrowseClicked()
 	return FReply::Handled();
 }
 
-FReply SJsonSyncPanel::OnSetAllClicked(bool bTake)
+FReply SJsonSyncPanel::OnSetAllClicked(EKeySource Source)
 {
 	for (const TSharedPtr<FKeyItem>& Item : KeyItems)
 	{
-		Item->bTake = bTake;
-		Ticks.Add(Item->Diff.Key, bTake);
+		SetSource(*Item, Source);
 	}
 	return FReply::Handled();
 }

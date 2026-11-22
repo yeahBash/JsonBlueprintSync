@@ -61,7 +61,7 @@ Each asset type has a mode, set in **Project Settings > Plugins > JSON Blueprint
 | Mode | Saving the asset | JSON changed on disk |
 |---|---|---|
 | **None** | Nothing. | Ignored. |
-| **Write JSON Only** | Writes the JSON. | Listed in the JSON Sync tab. Applied only when you click **Apply JSON**. |
+| **Write JSON Only** | Writes the JSON. | Listed in the JSON Sync tab. Applied only when you choose the values and click **Apply**. |
 | **Two Way** | Writes the JSON. | Applied automatically when the editor starts, unless a key conflicts or the parent differs. Those are listed in the JSON Sync tab. |
 
 | Asset type | Default | Two Way allowed |
@@ -145,7 +145,7 @@ properties are diffed against its class's defaults. Only properties editable on 
 | Event | What happens |
 |---|---|
 | Editor start (asset registry loaded) | Assets whose JSON file or `.uasset` changed since the last sync are compared with their JSON. Two Way assets whose JSON changed keys without conflicts are applied. The rest are listed, and a notification offers **Review** (opens the JSON Sync tab) or **Later**. |
-| Asset saved | Its JSON file is written. **Exception:** if the JSON has changes that are not reviewed yet, the file is left alone and a notification says so. The asset stays in the JSON Sync tab until you choose Apply JSON or Overwrite JSON. A JSON that is only out of date (it has no changes of its own) is written as usual. |
+| Asset saved | Its JSON file is written. **Exception:** if the JSON has changes that are not reviewed yet, the file is left alone and a notification says so. The asset stays in the JSON Sync tab until you apply it there. A JSON that is only out of date (it has no changes of its own) is written as usual. |
 | Asset renamed | The JSON file moves with it. |
 | Asset deleted | The JSON file is deleted. |
 
@@ -158,7 +158,7 @@ Problems are shown as notifications, not only in the Output Log (category `LogJs
 - `Saved/JsonBlueprintSync/cache.json` cannot be read (at start-up) or written (once, until a write works again).
 - A JSON file cannot be written, or cannot be deleted when its asset is renamed or deleted.
 - An asset is renamed but its JSON cannot be read, so the file is not moved.
-- An Apply JSON is undone (the asset is listed again).
+- An apply is undone (the asset is listed again).
 - An asset is saved but its JSON is not written, because it has unreviewed changes or changed again after you reviewed it.
 
 ### The JSON Sync tab
@@ -169,36 +169,47 @@ status:
 - **N keys**: the JSON changed keys. Two Way assets in this state are applied at start-up and rarely stay listed.
 - **N keys, conflicts**: some keys are conflicts (see below).
 - **N keys, JSON out of date**: the asset changed and the JSON did not, e.g. a teammate committed the `.uasset` without its JSON.
-  Save the asset or press **Overwrite JSON**.
+  Save the asset, or press **Apply**: every key keeps the asset's value by default.
 - **N keys, parent differs**: the JSON names another parent (or data asset class) than the asset has, e.g. after a reparent. The
-  JSON's values were relative to the old parent. Usually **Overwrite JSON** is right.
-- **Cannot read the JSON**: only Overwrite JSON is possible.
+  JSON's values were relative to the old parent. Usually **All from Asset**, then **Apply**, is right.
+- **Cannot read the JSON**: the only action is **Overwrite JSON**, which writes the asset's values to the file. Or fix the file and
+  press **Refresh**.
 
-Select an asset to see the keys that differ, with the JSON value, the asset value, and which side changed each key:
+Select an asset to see the keys that differ, as in a merge tool: the JSON value, the asset value, which side changed each key,
+and which value the key will use (**Use**). The used value is highlighted; the other one is dimmed.
 
-- **JSON**: only the file changed. Ticked by default.
-- **Asset**: only the asset changed (e.g. you edited it but have not saved yet, or its `.uasset` was committed without the JSON).
-  Not ticked.
-- **Conflict**: both sides changed, or there is no record of what the asset was before, so the plugin cannot tell. Not ticked, and
-  highlighted. Decide these yourself.
+| Changed in | Meaning | Uses by default |
+|---|---|---|
+| **JSON** | Only the file changed. | JSON |
+| **Asset** | Only the asset changed (e.g. you edited it but have not saved yet, or its `.uasset` was committed without the JSON). | Asset |
+| **Conflict** (orange) | Both sides changed, or there is no record of what the asset was before, so the plugin cannot tell. | nothing: **Choose** |
 
 `(default)` means the key is not set on that side, so it has the archetype's value.
 
-Actions:
+To choose the value a key uses:
 
-- **Apply JSON** sets the ticked keys to the JSON value and keeps the asset's value for the rest. All the assets you apply are one
-  undo step. The assets are left modified and **never saved automatically**: save them to keep the changes, which also writes
-  their JSON. If you left keys unticked, that save writes the asset's values for them into the JSON.
-  - **Ctrl+Z** of an Apply JSON (or of a Two Way apply) puts the asset back in the tab, and saving it then does not write its
-    JSON, so the JSON change is not lost. **Ctrl+Y** applies it again.
+- **click** its JSON value or its asset value, or
+- select keys (Ctrl/Shift+click) and **right-click**: **Use JSON**, **Use Asset**, or **Reset** (back to the default), or
+- use **All from JSON**, **All from Asset** or **Reset** below the list.
+
+Your choices are kept while you switch between assets and when the tab refreshes. A choice is dropped if the key's JSON or asset
+value changes meanwhile.
+
+Once every conflict is chosen (the counter below the list shows how many are left), apply:
+
+- **Apply** sets the keys that use JSON to their JSON values. The keys that use the asset keep its values. All the keys are one
+  undo step. The asset is left modified and **not saved**: save it to keep the changes, which also writes its JSON with the
+  chosen values. If nothing in the asset changes (every key uses the asset), the JSON is written at once.
+- **Apply and Save** does the same and then saves the asset, which writes its JSON. If source control needs the file checked out,
+  it asks first. If the save does not happen, a notification says so and the asset is left modified, as after Apply.
+- After either one:
+  - **Ctrl+Z** of the apply (or of a Two Way apply) puts the asset back in the tab if it has not been saved yet, and saving it
+    then does not write its JSON, so the JSON change is not lost. **Ctrl+Y** applies it again. After Apply and Save, Ctrl+Z is
+    an ordinary edit: the asset is modified, and saving it writes its values to the JSON.
   - If the JSON file changes again before you save (e.g. a `git pull`), the save does not write the JSON. The asset is listed
     again, with the JSON you reviewed as the base: the file's new changes are JSON changes, and the values you kept are asset
     changes. A Refresh before the save does the same.
-- **Overwrite JSON** writes the asset's current values to the JSON and discards the file's changes.
 - **Show in Content Browser** selects the asset. Double-clicking an asset opens its editor.
-- **Tick All** / **Tick None** set every key.
-
-Ticks are kept while the tab refreshes.
 
 ### How the plugin tells which side changed
 
@@ -215,7 +226,7 @@ There is no base, so every differing key shows as **Conflict**, when:
 - the asset had unsaved changes when the file changed, or
 - the JSON changed and names another parent than the asset has, or
 - the plugin has never synced the asset before, or
-- the asset was saved while its JSON had unreviewed changes (unless you had just reviewed it: see Apply JSON above).
+- the asset was saved while its JSON had unreviewed changes (unless you had just applied it: see Apply above).
 
 A Blueprint is also changed by edits to its parent Blueprint or its C++ class, without its own `.uasset` changing. Such a change is
 not detected until the Blueprint is saved; `-verify` catches it.
