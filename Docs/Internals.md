@@ -981,15 +981,18 @@ is never skipped by the hash check.
 - *Change inherited from a parent Blueprint or the C++ class*: the child's `.uasset` does not change, so nothing is detected. The
   child's document holds only its overrides, so it stays correct, except when:
   - the parent now equals a child override: the key is still listed but is no longer an override (applying it changes nothing);
-  - the parent removed or renamed an overridden property or component: the key is unknown, and applying the file fails;
-  - the child overrides one field of a struct that is serialized field by field (User Defined Structures, C++ structs without
-    `immutable`/`atomic`), and the parent changed another field: a fresh load gives the child the parent's new value for that
-    field, but the document holds the whole struct with the old one. Atomic structs (`FLinearColor`, `FVector`, `FRotator`,
-    `FTransform`, ...) are saved whole, so the `.uasset` and the document agree; only the open editor differs until a restart,
-    because the Details panel propagates the edited field (`FPropertyNode::PropagatePropertyChange`). Arrays are compared and
-    saved whole, so they are not affected. See manual test 7.3.
+  - the parent removed or renamed an overridden property or component: the key is unknown, and applying the file fails.
 
   These last until the child is saved. `-verify` catches them.
+
+  Structs changed in part are not an exception. `CaptureObject` exports with the archetype's value as the delta
+  (`ExportTextItem_Direct(Text, Value, Base, ...)`), and `UScriptStruct::ExportText` then writes only the fields that differ, the
+  same fields that tagged serialization stores in the `.uasset`. Apply parses that text onto the archetype's value, so the missing
+  fields are inherited, as on load. Atomic structs (`immutable`, e.g. `FVector`, `FRotator`, `FQuat`, `FColor`, `FLinearColor`)
+  export every field (`ExportText` sets the delta to the value) and are serialized whole, so the `.uasset` and the document
+  agree on those too. Only the open editor differs: the Details panel copies the parent's edited field into the children
+  (`FPropertyNode::PropagatePropertyChange`), and they show it until a restart. `FTransform` is not atomic; it is delta-exported
+  per member (Rotation, Translation, Scale3D), each of which is atomic. See manual test 7.3.
 
   Unreal's own propagation decides whether the children become dirty. The Details panel's generic path
   (`FPropertyNode::PropagatePropertyChange`) writes the instances without `Modify`, so they stay clean, and compiling the parent
@@ -1088,8 +1091,8 @@ where noted.
 4. **A new pending toast on every Refresh** while anything is pending.
 5. **Some inherited changes leave a child's JSON out of date.** Editing a parent Blueprint or a C++ default does not change a
    child's `.uasset`. The child's JSON lists only its overrides, so it usually stays correct. The exceptions (the parent now matches
-   a child override, an overridden property or component was removed or renamed, a field-by-field struct the child changed in
-   part) go unnoticed until the child is saved. Run `-verify` in CI to catch them.
+   a child override, an overridden property or component was removed or renamed) go unnoticed until the child is saved. Both are
+   harmless or fail loudly. Run `-verify` in CI to catch them.
 6. **A changed `.uasset` is loaded at start-up** to compare it, even if only its graph changed. After pulling many assets, start-up
    is slower, once.
 7. **`-import` saves every dirty Blueprint and data asset in memory**, not only those it changed.

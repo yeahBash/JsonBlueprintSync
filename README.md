@@ -116,7 +116,9 @@ One file per asset under `/Game`, at `<JsonDir>/<package path>.json`. For exampl
   - A missing `overrides`, `self`, `components` or `widgets` means that nothing in it is overridden.
 - **The file is complete: a missing key means the archetype's value.** Deleting a line and applying the file resets that property
   to the parent's (or the class's) value.
-- **Arrays and structs are replaced whole.**
+- **A struct lists only the fields that differ from the archetype**, as Unreal saves it, e.g. `"(A=5.000000)"`. A missing
+  field takes the archetype's value. Structs that Unreal saves as a unit (colours, vectors, rotators, quaternions) list every
+  field. Arrays, sets and maps are replaced whole.
 - **`parent`** is the parent class of a Blueprint, or the class of a data asset. It is not applied: reparenting is done in the
   editor. If it differs from the asset's (e.g. the Blueprint was reparented), the values in the file are relative to another
   archetype. The editor then lists the asset as **parent differs** and applies nothing automatically, and the commandlet logs a
@@ -264,13 +266,14 @@ A child's JSON goes out of date without its `.uasset` changing only when:
   child is saved. Applying it changes nothing.
 - the parent removes or renames a variable or component that the child overrides. The child's file names a key that no longer
   exists, so applying it reports an error and applies nothing in that file.
-- the child changed one field of a struct that Unreal saves field by field (a User Defined Structure, or most C++ structs), and the
-  parent then changes another field. The child loads the parent's new value for that field, but its file holds the whole struct,
-  with the old one. Engine structs such as colours, vectors, rotators and transforms are saved whole, so for them the child keeps
-  the old value on disk and in its file; only the open editor shows the parent's new value until a restart. See
-  [manual test 7.3](Docs/ManualTests.md#7-propagation-and-inherited-components).
 
 Nothing detects these, because the child's `.uasset` does not change. Saving the child fixes its file; `-verify` reports them.
+
+Structs that the child changes in part are not affected. The child's file lists only the fields the child sets, so a parent change
+to another field is inherited, as it is in the `.uasset`. Unreal saves colours, vectors and rotators whole, and the file lists them
+whole too, so the child keeps its whole value in both. Only the open editor differs: the Details panel copies the parent's edited
+field into the child, which shows it until the editor restarts (saving the child keeps it). See
+[manual test 7.3](Docs/ManualTests.md#7-propagation-and-inherited-components).
 
 ### Local state
 

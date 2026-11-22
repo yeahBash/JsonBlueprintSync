@@ -551,13 +551,14 @@ Expected: the child's Light goes back to the parent's Intensity.
 
 **7.3 Parent changes part of a struct the child overrides**
 
-This checks the struct case of README "Changes to a parent". The expectations come from reading the engine code; record what
-happens, and if it differs, update that section and this test.
+This checks the struct paragraph of README "Changes to a parent": a child's file lists only the struct fields it sets, so
+inherited fields follow the parent.
 
 1. In `BP_SyncLamp` Class Defaults, set `Tint` = R 0.5, G 0.5, B 0.5, A 1. Compile and save.
 2. In `BP_SyncLampChild` Class Defaults, expand `Tint` and change only R to 1. Compile and save.
 
-Expected: `BP_SyncLampChild.json` has the whole struct in `self.Tint`, with `R=1.000000` and `G=0.500000`.
+Expected: `BP_SyncLampChild.json` has the whole colour in `self.Tint`, with `R=1.000000` and `G=0.500000` (Unreal saves a
+colour as a unit).
 
 3. In `BP_SyncLamp`, change only `Tint` G to 0.2. Compile and save. Do not touch the child.
 
@@ -569,23 +570,23 @@ Expected:
 4. Close the editor without saving the child, and run the commandlet with `-verify -dir=/Game/Developers/<you>/JsonSyncTest`.
    Then start the editor.
 
-Expected: a Linear Color is saved whole, so the child's `.uasset` still has G = 0.5, as its JSON does. `-verify` passes, and after
-the restart the child shows G = 0.5 again.
+Expected: the child's `.uasset` still has G = 0.5, as its JSON does. `-verify` passes, and after the restart the child shows
+G = 0.5 again.
 
 5. Create a **Structure** (Blueprint > Structure) `S_SyncPair` with two Float members, `A` and `B`. Add a variable `Pair` of type
    `S_SyncPair` to `BP_SyncLamp`, set A = 1 and B = 1, compile and save. In `BP_SyncLampChild`, change only `Pair` A to 5, compile
    and save.
 
-Expected: `BP_SyncLampChild.json` has the whole struct in `self.Pair` (member names carry a GUID suffix), with A 5 and B 1.
+Expected: `BP_SyncLampChild.json` has `self.Pair` with only A (member names carry a GUID suffix), e.g. `"(A_2_...=5.000000)"`.
 
 6. In `BP_SyncLamp`, change only `Pair` B to 7. Compile and save. Close the editor without saving the child, and run `-verify`.
 
-Expected: a User Defined Structure is saved field by field, so a fresh load gives the child B = 7 while its JSON says B = 1.
-`-verify` reports `BP_SyncLampChild`.
+Expected: `-verify` passes. `BP_SyncLampChild.json` is unchanged.
 
-7. Start the editor and save the child.
+7. Start the editor. In `BP_SyncLampChild.json`, set `self.FlickerSpeed` to another value (add the key if it is missing).
+   Refresh, then **Apply**.
 
-Expected: `BP_SyncLampChild.json` has B 7, and `-verify` passes again.
+Expected: the child shows `Pair` A 5 and B 7: B is inherited, not reset to 1.
 
 8. Clean up: remove the `Pair` variable from `BP_SyncLamp`, compile and save it and the child, and delete `S_SyncPair`.
 
