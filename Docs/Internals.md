@@ -526,17 +526,23 @@ This runs at start-up, on `JsonBlueprintSync.Sync` and on the tab's Refresh butt
    - the parents agree;
    - no key is `Both`;
    - at least one key is `Json` (a JSON that is only out of date stays listed);
+   - the package is not dirty, because the apply saves it (step 3 below would save the user's unsaved edits too). A dirty asset
+     usually has no base anyway, but one that was already pending keeps its stored base;
    - `IsInUndoHistory` is false: no transaction in `GEditor->Trans` (the whole queue, so undo and redo steps) holds an object of
      the asset's package. Otherwise the asset stays listed, with a log line.
 
    The keys applied are the `Json` keys; `Asset` keys keep the asset's value. All such assets are applied in one batch
-   (`ApplyBatch` with `bAutomatic`), with **no transaction**: the JSON is the source of truth, so Ctrl+Z must not bring back the
+   (`ApplyBatch` with `bAutomatic`), with **no transaction**, and **saved**: the JSON is the source of truth, so Ctrl+Z must not bring back the
    old values and let the next save write them over the JSON. The undo-history check is what makes that safe. Changing an object
    outside a transaction while an older transaction holds it would break undo: undoing or redoing that transaction restores the
    object's state from before the apply, so the applied values would be lost and the next save would write the old ones. At editor
    start the history is empty, so the check matters only for a Refresh or `JsonBlueprintSync.Sync` later in the session. An asset
    whose tab apply was undone is caught by it too (the apply is a redo step, or sits under the edits made since), so there is no
    separate check for `Undone`.
+
+   The save keeps the `.uasset` on disk (what cooking uses) equal to the JSON, and closes a hole: left unsaved, a Reload or a
+   source control revert of the asset would bring back its old values while it is still in `Resolved`, and its next save would
+   write them over the JSON.
 6. Show the pending toast (Review / Later) if anything is pending, and broadcast `OnPendingChanged`, which refreshes the tab.
 
 #### Detect: one changed file
@@ -600,12 +606,15 @@ request, then `OnPendingChanged`. With `bSave`:
    file, or cannot be loaded fails.
 2. Sort by `GetApplyOrder` (stable): parents first, data assets last.
 3. Inside one `FScopedTransaction("Apply JSON")` (none if `bAutomatic`), call `Apply` for each. Warnings and errors go to the log. A failed asset is skipped,
-   stays pending, and the others go on. Changed assets are `MarkModified`. **Nothing is compiled and nothing is saved.** If nothing
+   stays pending, and the others go on. Changed assets are `MarkModified`. **Nothing is compiled, and nothing is saved here.** If nothing
    changed, the transaction is cancelled, so no empty undo step is left. The transaction's id (`GUndo->GetContext().TransactionId`)
    is kept for the assets it changed. Without a transaction, `Modify` only marks the package dirty and the id stays invalid.
 4. `Resolve` each asset that succeeded, with the transaction id if the apply changed it, then save the cache.
-5. Toasts: "Applied JSON to … Not saved; Ctrl+Z reverts." (automatic: "Applied JSON to … automatically (Two Way). Not saved;
-   Ctrl+Z does not revert it.") and/or "Cannot apply the JSON of …".
+5. If `bAutomatic`, save the changed assets with `FEditorFileUtils::PromptForCheckoutAndSave` (checkout first if source control
+   needs it). The save goes through `OnPackageSaved` like any resolved asset, so it writes the JSON. An asset still dirty afterwards
+   (checkout declined, save failed) stays resolved, as after a manual Apply.
+6. Toasts: "Applied JSON to … Not saved; Ctrl+Z reverts." (automatic: "Applied JSON to … automatically (Two Way) and saved it.",
+   or the warning "…automatically (Two Way), but it was not saved…") and/or "Cannot apply the JSON of …".
 
 `Resolve(Package, Asset, TransactionId)`:
 
@@ -723,6 +732,7 @@ program holds it open).
   | "not checked during Play In Editor" | Warning | the console command or Refresh during PIE |
   | "Cannot apply the JSON of …" | Error | an apply failed |
   | "Applied the JSON to …, but it was not saved" | Warning | Apply and Save could not save the asset (declined checkout, failed save) |
+  | "Applied JSON to … automatically (Two Way), but it was not saved" | Warning | the save after an automatic apply did not happen |
 
 - `ShowPendingNotification` replaces the previous "N asset(s) differ" toast with a sticky one: up to eight names, then "and N more",
   with Review (opens the tab) and Later (closes the toast) buttons. It is shown after every `SyncFromJson` that leaves something
@@ -987,7 +997,7 @@ is never skipped by the hash check.
   asset stays pending.
 - *Ctrl+Z of a later edit (not the apply)*: nothing changes in the sync state. The asset stays resolved.
 - *Apply, then close the editor without saving*: the cache still has the old hash, so the next start detects the file again and
-  lists it (or Two Way applies it again).
+  lists it. (A Two Way auto-apply is saved at once; if that save failed, the next start applies it again.)
 - *Apply, then the JSON changes again before saving*: the save (or a Refresh before it) notices that the file is no longer the
   reviewed one. The asset is pending again with the reviewed file as the base, so the new changes are `Json` keys (using JSON) and the
   values the user kept are `Asset` keys. The save does not write the JSON. A Two Way asset is applied again at the Refresh if
@@ -1054,5 +1064,5 @@ where noted.
 7. **`-import` saves every dirty Blueprint and data asset in memory**, not only those it changed.
 8. **Native (C++) components** are captured and applied with the same code as Blueprint components, but have not been tested on
    real assets.
-9. **An automatic Two Way apply cannot be undone** ([corner cases](#5-corner-cases)), by design. To back out a bad JSON, edit the
-   values and save, or revert the JSON in git.
+9. **An automatic Two Way apply cannot be undone and is saved at once** ([corner cases](#5-corner-cases)), by design. To back
+   out a bad JSON, edit the values and save, or revert the JSON in git (the reverted file is a JSON change, so it is applied and saved in turn).

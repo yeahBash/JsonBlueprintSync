@@ -62,7 +62,7 @@ Each asset type has a mode, set in **Project Settings > Plugins > JSON Blueprint
 |---|---|---|
 | **None** | Nothing. | Ignored. |
 | **Write JSON Only** | Writes the JSON. | Listed in the JSON Sync tab. Applied only when you choose the values and click **Apply**. |
-| **Two Way** | Writes the JSON. | Applied automatically when the editor starts, unless a key conflicts or the parent differs. Those are listed in the JSON Sync tab. The automatic apply cannot be undone with Ctrl+Z. |
+| **Two Way** | Writes the JSON. | Applied automatically when the editor starts, unless a key conflicts or the parent differs. Those are listed in the JSON Sync tab. The automatic apply saves the asset and cannot be undone with Ctrl+Z. |
 
 | Asset type | Default | Two Way allowed |
 |---|---|---|
@@ -73,12 +73,18 @@ Each asset type has a mode, set in **Project Settings > Plugins > JSON Blueprint
 For Blueprints the `.uasset` stays the source of truth: the JSON is for reviewing and merging, and changes come back only when
 someone chooses to apply them. Data assets are plain data, so a JSON edit can be trusted to apply on its own.
 
-For Two Way the JSON is the source of truth, so the automatic apply is not an undo step: Ctrl+Z cannot quietly bring back the
-old values and have the next save write them over a teammate's change. To back out a JSON change, edit the values and save (which
-writes the JSON), or revert the JSON file in source control. One exception keeps this safe: if the asset is in the undo history of
-this session (you edited it, or undid an apply), a Refresh or `JsonBlueprintSync.Sync` does not apply it automatically, because
-undoing those steps would bring back the values from before the apply. It is listed in the JSON Sync tab instead, and the log
-says why. At editor start the undo history is empty, so this does not happen there.
+For Two Way the JSON is the source of truth. The automatic apply saves the asset at once (checking it out first if source control
+needs it), so the `.uasset` on disk, which is what the game uses, matches the JSON. It is not an undo step: Ctrl+Z cannot quietly
+bring back the old values and have the next save write them over a teammate's change. To back out a JSON change, edit the values
+and save (which writes the JSON), or revert the JSON file in source control. If the save does not happen (e.g. you decline the
+checkout), a warning says so and the asset is left modified: save it yourself.
+
+Two checks keep this safe. They matter only for a Refresh or `JsonBlueprintSync.Sync` later in the session; at editor start
+neither applies. An asset is not applied automatically, but listed in the JSON Sync tab with a log line, if:
+
+- it has unsaved changes, because the automatic save would save them too;
+- it is in the undo history of this session (you edited it, or undid an apply), because undoing those steps would bring back
+  the values from before the apply.
 
 ## JSON format
 

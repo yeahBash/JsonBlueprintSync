@@ -512,6 +512,15 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 		{
 			continue;
 		}
+		const UPackage* Package = FindPackage(nullptr, *PackageName);
+		if (Package && Package->IsDirty())
+		{
+			// The automatic apply saves the asset, which would save the user's unsaved edits with it. Usually such an asset has no base
+			// and is not applied anyway, but one that was already pending keeps its stored base.
+			UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s: not applied automatically, because it has unsaved changes; review it in the JSON Sync tab"),
+				*PackageName);
+			continue;
+		}
 		if (IsInUndoHistory(PackageName))
 		{
 			// The automatic apply is not undoable, which is safe only if no undo step holds the asset. Rare: at start-up the history is
@@ -829,13 +838,44 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 	}
 	SaveCache();
 
-	if (bNotify && Changed.Num() > 0)
+	if (bAutomatic)
 	{
-		const FText Names = FText::FromString(JoinShort(Changed));
-		Notify(bAutomatic
-			? FText::Format(LOCTEXT("AppliedAutomatically", "Applied JSON to {0} automatically (Two Way). Not saved; Ctrl+Z does not revert it."), Names)
-			: FText::Format(LOCTEXT("Applied", "Applied JSON to {0}. Not saved; Ctrl+Z reverts."), Names),
-			ENotice::Success);
+		// Save at once, so the .uasset matches the JSON it came from. Left unsaved, a Reload or a source control revert of the asset
+		// would bring back its old values while it still counts as resolved, and the next save would write them over the JSON. Only
+		// assets without unsaved changes are applied automatically (SyncFromJson skips dirty ones), so this saves nothing else.
+		TArray<UPackage*> ToSave;
+		for (const FItem& Item : Items)
+		{
+			if (ChangedPackages.Contains(Item.PackageName) && IsDirty(Item.Asset))
+			{
+				ToSave.Add(Item.Asset->GetPackage());
+			}
+		}
+		if (ToSave.Num() > 0)
+		{
+			// Saving writes the JSON (OnPackageSaved, as for any resolved asset). Checks the files out first if source control needs it.
+			FEditorFileUtils::PromptForCheckoutAndSave(ToSave, true, false);
+		}
+		TArray<FString> Saved;
+		TArray<FString> NotSaved;
+		for (const UPackage* Package : ToSave)
+		{
+			(Package->IsDirty() ? NotSaved : Saved).Add(GetAssetName(Package->GetName()));
+		}
+		if (bNotify && Saved.Num() > 0)
+		{
+			Notify(FText::Format(LOCTEXT("AppliedAutomatically", "Applied JSON to {0} automatically (Two Way) and saved it."),
+				FText::FromString(JoinShort(Saved))), ENotice::Success);
+		}
+		if (NotSaved.Num() > 0)
+		{
+			Notify(FText::Format(LOCTEXT("AppliedAutomaticallyNotSaved", "Applied JSON to {0} automatically (Two Way), but it was not saved. Save it to keep the change; Ctrl+Z does not revert it."),
+				FText::FromString(JoinShort(NotSaved))), ENotice::Warning);
+		}
+	}
+	else if (bNotify && Changed.Num() > 0)
+	{
+		Notify(FText::Format(LOCTEXT("Applied", "Applied JSON to {0}. Not saved; Ctrl+Z reverts."), FText::FromString(JoinShort(Changed))), ENotice::Success);
 	}
 	if (Failed.Num() > 0)
 	{

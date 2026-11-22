@@ -421,12 +421,9 @@ rejects such a file and `-verify` reports it.
 Expected:
 
 - No asset is listed.
-- The toast "Applied JSON to DA_SyncItem automatically (Two Way). Not saved; Ctrl+Z does not revert it." appears.
-- `DA_SyncItem` is dirty and shows Damage 20.
-
-2. Save it.
-
-Expected: the JSON reads `"20.000000"`.
+- The toast "Applied JSON to DA_SyncItem automatically (Two Way) and saved it." appears.
+- `DA_SyncItem` shows Damage 20 and is **not** dirty: the `.uasset` was saved (its modified time changed).
+- The JSON reads `"20.000000"` (rewritten by the save).
 
 **5.2 Not applied when the asset has unsaved changes**
 
@@ -465,7 +462,7 @@ Expected: nothing is undone (Edit > Undo History is empty). Damage stays 21, no 
 
 Expected: the JSON has the old value again. This is the way to back out a JSON change (or revert the JSON in git).
 
-**5.7 Not applied automatically when the asset is in the undo history**
+**5.7 Not applied automatically when the asset has unsaved changes or is in the undo history**
 
 1. Open `DA_SyncItem`, change `Label`, and save. Change `Damage` in the JSON and press **Refresh**.
 
@@ -482,11 +479,12 @@ Expected: Damage goes back, the undo warning toast appears, and the asset is lis
 
 4. Press **Refresh**.
 
-Expected: still not applied (the apply is a redo step), with the same log line.
+Expected: still not applied. The undo left the asset dirty, so the log now says "not applied automatically, because it has
+unsaved changes" (the apply is also a redo step, which would stop it too).
 
 5. Close the editor, choose **Don't Save**, and start it again.
 
-Expected: applied automatically, as in 5.1: the undo history starts empty.
+Expected: applied automatically and saved, as in 5.1: the undo history starts empty and the asset is clean.
 
 ## 6. No base
 

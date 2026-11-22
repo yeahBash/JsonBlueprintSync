@@ -20,7 +20,7 @@ struct FAssetData;
  * - Saving an asset writes its JSON, unless the JSON has changes that are not reviewed yet (then the asset is "pending").
  * - When the asset registry has finished loading, finds JSON files that changed since the last sync and differ from their asset.
  *   They are listed in the JSON Sync tab. Data assets in Two Way mode get the JSON applied automatically when nothing conflicts;
- *   that apply cannot be undone, and it is skipped for an asset that the undo history holds.
+ *   that apply cannot be undone, saves the asset, and is skipped for an asset that the undo history holds.
  * - Moves the JSON file when an asset is renamed and deletes it when the asset is deleted.
  * - Undoing an Apply JSON from the tab puts the asset back in the JSON Sync tab; a JSON that changes again after it was reviewed is
  *   not overwritten.
@@ -146,7 +146,8 @@ private:
 	/**
 	 * Applies the keys to each asset (Blueprints first, parents before children). Returns the resolved packages.
 	 * bAutomatic: a Two Way apply, which is not recorded for undo, so that Ctrl+Z cannot revert a JSON change that came from
-	 * elsewhere. Otherwise the whole batch is one transaction. Callers of an automatic apply must check IsInUndoHistory first.
+	 * elsewhere, and which saves the changed assets. Otherwise the whole batch is one transaction and nothing is saved. Callers of
+	 * an automatic apply must check IsInUndoHistory first.
 	 */
 	TArray<FString> ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, bool bNotify, bool bAutomatic);
 
