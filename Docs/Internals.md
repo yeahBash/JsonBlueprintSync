@@ -87,11 +87,12 @@ Source/JsonBlueprintSync/
     JsonBlueprintSyncSettings.h      project settings
   Private/
     JsonBlueprintSync.cpp            library implementation
-    JsonBlueprintSyncModule.cpp      tab registration
+    JsonBlueprintSyncModule.cpp      tab and status bar registration
     JsonBlueprintSyncSettings.cpp
     SyncState.h / .cpp               three-way diff, merge, local cache
     JsonBlueprintSyncSubsystem.h / .cpp   editor runtime
     SJsonSyncPanel.h / .cpp          the JSON Sync tab
+    SJsonSyncStatusBar.h / .cpp      the status bar entry
     JsonBlueprintSyncCommandlet.h / .cpp  -run=JsonBlueprintSync
     Tests/JsonBlueprintSyncTests.cpp automation tests
 ```
@@ -116,6 +117,7 @@ Dependencies and why each is needed:
 | Json, JsonUtilities | parsing JSON (writing is done by hand, see [2.5](#serialization-tojson)) |
 | EditorSubsystem | `UEditorSubsystem` |
 | Slate, SlateCore, InputCore | the tab and notifications. InputCore provides `EKeys`, which the list views reference. |
+| ToolMenus | adds the status bar entry (`LevelEditor.StatusBar.ToolBar`) |
 | WorkspaceMenuStructure | puts the tab under the Window menu |
 | UMG | `UWidget`, `UPanelSlot`, `UWidgetTree` |
 | UMGEditor | only the tests use it, to build Widget Blueprints |
@@ -131,6 +133,14 @@ Dependencies and why each is needed:
 `StartupModule` registers a nomad tab spawner. The tab is titled "JSON Sync", is placed in the Level Editor group of the Window menu
 (`WorkspaceMenu::GetMenuStructure().GetLevelEditorCategory()`), and holds an `SJsonSyncPanel`. Registration is skipped in commandlets
 and when Slate is not initialized (e.g. `-nullrhi` runs), so headless runs do not touch the UI. `ShutdownModule` unregisters it.
+
+It also adds `SJsonSyncStatusBar` to the level editor's status bar, through `UToolMenus::RegisterStartupCallback` and
+`ExtendMenu("LevelEditor.StatusBar.ToolBar")`, in its own section just before the `SourceControl` section (which holds the
+unsaved assets and revision control entries). The menu owner is the module, so `ShutdownModule` removes it with
+`UToolMenus::UnregisterOwner`. The widget is a flat button styled like the unsaved assets entry: the `Icons.Merge` icon and
+"JSON Synced" or "N JSON to Review", in the warning colour while anything is pending. It polls the subsystem's
+`GetPendingNum()` (the size of `Pending`) on each paint, so it needs no delegate. The tooltip lists up to ten pending assets, built
+only when shown. A click calls `OpenSyncTab`. Asset editors have their own status bars; the entry is only in the level editor's.
 
 Caveat: the editor remembers open tabs in its layout. If the plugin is disabled while the tab was open, the editor shows an empty
 "unrecognized tab" placeholder on next start. That is standard Unreal behaviour.

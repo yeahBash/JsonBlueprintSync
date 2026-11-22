@@ -24,6 +24,7 @@ public class JsonBlueprintSync : ModuleRules
 			"Slate",
 			"SlateCore",
 			"InputCore",
+			"ToolMenus",
 			"WorkspaceMenuStructure",
 			"UMG",
 			// Only the tests use it, to build Widget Blueprints; the library reads them through UnrealEd's UBaseWidgetBlueprint.

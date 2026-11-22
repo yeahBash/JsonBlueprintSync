@@ -51,7 +51,7 @@ Some `Condition failed` lines may appear at startup. They come from the engine's
 | Local cache | `<Project>/Saved/JsonBlueprintSync/cache.json` |
 | Base snapshots | `<Project>/Saved/JsonBlueprintSync/Base/Game/...` |
 | Log | Output Log, filtered by the category `LogJsonBlueprintSync` |
-| Tab | **Window > JSON Sync** |
+| Tab | **Window > JSON Sync**, or the JSON Sync entry in the status bar |
 | Rerun the check | **Refresh** in the tab, or the console command `JsonBlueprintSync.Sync` |
 | Settings | **Project Settings > Plugins > JSON Blueprint Sync** |
 
@@ -378,6 +378,20 @@ Expected: the JSON gets the old value back (shown in git as a change).
 
 Expected: the warning toast "Applied the JSON to BP_SyncLamp, but it was not saved. …". The asset is dirty and not listed, as after
 **Apply**. Saving it later writes the JSON.
+
+**3.19 Status bar**
+
+1. With nothing listed, look at the status bar at the bottom of the level editor.
+
+Expected: left of the unsaved assets entry, "JSON Synced" with the merge icon. The tooltip says no asset has JSON changes.
+
+2. Change `FlickerSpeed` in `BP_SyncLamp.json` and press **Refresh** (or run `JsonBlueprintSync.Sync`).
+
+Expected: the entry turns yellow and reads "1 JSON to Review". Its tooltip lists `BP_SyncLamp`.
+
+3. Close the JSON Sync tab and click the entry.
+
+Expected: the tab opens. After **Apply** (or Overwrite JSON) the entry reads "JSON Synced" again.
 
 ## 4. Bad files
 

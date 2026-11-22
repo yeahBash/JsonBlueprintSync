@@ -73,6 +73,9 @@ public:
 	/** Pending package names, sorted. */
 	TArray<FString> GetPendingPackages() const;
 
+	/** How many assets are pending. Cheap: the status bar asks every frame. */
+	int32 GetPendingNum() const { return Pending.Num(); }
+
 	/** Compares the pending asset with its JSON now. Returns false if the package is not pending. */
 	bool GetPendingView(const FString& PackageName, FPendingView& OutView) const;
 

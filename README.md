@@ -179,7 +179,9 @@ Problems are shown as notifications, not only in the Output Log (category `LogJs
 
 ### The JSON Sync tab
 
-Open it from **Window > JSON Sync**, or with **Review** on a notification. The top list shows the assets whose JSON differs, with a
+Open it from **Window > JSON Sync**, with **Review** on a notification, or by clicking the JSON Sync entry in the status bar at the
+bottom of the editor, next to the unsaved assets. That entry reads **JSON Synced**, or **N JSON to Review** (in yellow) while
+assets are listed; its tooltip names them. The top list shows the assets whose JSON differs, with a
 status:
 
 - **N keys**: the JSON changed keys. Two Way assets in this state are applied at start-up and rarely stay listed.
