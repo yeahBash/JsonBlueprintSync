@@ -165,8 +165,7 @@ Expected:
 
 Expected:
 
-- Toast "Applied JSON to BP_SyncLamp. Not saved; Ctrl+Z reverts.", with the line "BP_SyncLamp: FlickerSpeed" and an **Undo**
-  button. It fades out after a few seconds.
+- Toast "Applied JSON to BP_SyncLamp. Not saved; Ctrl+Z reverts."
 - The asset leaves the tab and the summary reads "Every synced asset matches its JSON file."
 - The Blueprint is dirty (asterisk) and `FlickerSpeed` is 4.0 in Class Defaults. The JSON file is not touched yet.
 - The base file is deleted, and `pending` is gone from the cache.
@@ -421,8 +420,7 @@ rejects such a file and `-verify` reports it.
 Expected:
 
 - No asset is listed.
-- The toast "Applied JSON to DA_SyncItem automatically (Two Way). Not saved; Ctrl+Z reverts." appears, with the line
-  "DA_SyncItem: Damage" and the buttons **Undo** and **Dismiss**. It stays until you press one.
+- The toast "Applied JSON to DA_SyncItem. Not saved; Ctrl+Z reverts." appears.
 - `DA_SyncItem` is dirty and shows Damage 20.
 
 2. Save it.
@@ -469,29 +467,6 @@ Expected: it is **not** applied again (the log says its last apply was undone). 
 4. Change `Damage` in the JSON to `"22.0"` and press **Refresh**.
 
 Expected: applied automatically (a new file).
-
-**5.7 Undo button of an automatic apply**
-
-1. Close the editor. In `DA_SyncItem.json`, set `"Damage": "23.0"` and `"Label": "Undo test"`. Start the editor.
-
-Expected: the applied toast lists "DA_SyncItem: Damage, Label" and stays.
-
-2. Press **Undo** on it.
-
-Expected: as Ctrl+Z in 5.6: the values go back, the undo warning toast appears, and the JSON Sync tab opens with `DA_SyncItem`
-listed. Press **Apply and Save** to take the JSON after all.
-
-3. Repeat step 1 with `"Damage": "24.0"`. Before pressing Undo, change any value in another asset (e.g. `BP_SyncLamp`). Then press
-   **Undo** on the toast.
-
-Expected: nothing is undone, and a warning says other changes were made after the apply. The toast closes. **Edit > Undo History**
-still has the "Apply JSON" step.
-
-**5.8 Undo button of a manual apply**
-
-1. Change `FlickerSpeed` in `BP_SyncLamp.json`, Refresh, and press **Apply**. Press **Undo** on the toast before it fades out.
-
-Expected: as Ctrl+Z in 3.3: the value goes back and `BP_SyncLamp` is listed again.
 
 5. Press Ctrl+Z, close the editor, choose **Don't Save**, and start it again.
 
@@ -752,22 +727,6 @@ Expected: the files are written under `<Project>/Saved/JsonExportTest/Game/...`.
 Expected: an error about the path. With no action, or with two actions, you also get an error.
 
 In Git Bash, prefix the command with `MSYS_NO_PATHCONV=1`. Otherwise `-dir=/Game/...` becomes a Windows path and is rejected.
-
-**12.8 Verify script**
-
-1. From the project folder in PowerShell, run `.\Plugins\JsonBlueprintSync\Scripts\Verify.ps1`.
-
-Expected: it finds the project and the engine by itself, prints a few `LogJsonBlueprintSync` lines, then "Every synced asset
-matches its JSON." in green. `$LASTEXITCODE` is 0.
-
-2. Change a value in `BP_SyncLamp.json` and run it again.
-
-Expected: the line "...BP_SyncLamp.json: differs from ...; run -export or -import" and the red summary. `$LASTEXITCODE` is 1.
-Restore the file.
-
-3. Run it with `-EngineDir C:\Nope`.
-
-Expected: an error that `UnrealEditor-Cmd.exe` cannot be found.
 
 ## 13. `.uasset` changes and reparenting
 

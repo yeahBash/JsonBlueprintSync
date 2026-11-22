@@ -141,25 +141,8 @@ private:
 	/** Whether the JSON file on disk is the one recorded at the last sync, i.e. it has no changes of its own. */
 	bool IsJsonUnchanged(const FString& PackageName) const;
 
-	/** Which success toast an apply shows. Failures are always shown. */
-	enum class EApplyNotice : uint8
-	{
-		/** None: the caller shows its own. */
-		None,
-		/** The user pressed Apply: a toast that fades out. */
-		Manual,
-		/** Two Way applied it on its own: a toast that stays until dismissed. */
-		Automatic,
-	};
-
 	/** Applies the keys to each asset (Blueprints first, parents before children) in one transaction. Returns the resolved packages. */
-	TArray<FString> ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, EApplyNotice Notice);
-
-	/** The success toast of an apply: the changed keys of each asset (asset name, keys), and an Undo button if TransactionId is valid. */
-	void NotifyApplied(const TArray<TPair<FString, TArray<FString>>>& ChangedKeys, const FGuid& TransactionId, EApplyNotice Notice);
-
-	/** The toast's Undo button: undoes the apply if it is still the last transaction, and opens the JSON Sync tab. */
-	void UndoApply(const FGuid& TransactionId);
+	TArray<FString> ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, bool bNotify);
 
 	/** Clears the pending state after the user (or Two Way) picked the values. TransactionId: the apply's, if it changed the asset. */
 	void Resolve(const FString& PackageName, UObject* Asset, const FGuid& TransactionId);
@@ -227,7 +210,6 @@ private:
 	FTSTicker::FDelegateHandle RemovalTicker;
 
 	TWeakPtr<SNotificationItem> PendingNotification;
-	TWeakPtr<SNotificationItem> AppliedNotification;
 
 	FDelegateHandle FilesLoadedHandle;
 	FDelegateHandle PackageSavedHandle;
