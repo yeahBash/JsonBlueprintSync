@@ -144,7 +144,7 @@ properties are diffed against its class's defaults. Only properties editable on 
 
 | Event | What happens |
 |---|---|
-| Editor start (asset registry loaded) | Assets whose JSON file or `.uasset` changed since the last sync are compared with their JSON. Two Way assets whose JSON changed keys without conflicts are applied. The rest are listed, and a notification offers **Review** (opens the JSON Sync tab) or **Later**. |
+| Editor start (asset registry loaded) | Assets whose JSON file or `.uasset` changed since the last sync are compared with their JSON. Two Way assets whose JSON changed keys without conflicts are applied, and a notification lists the keys it changed, with **Undo** and **Dismiss** (it stays until you close it). The rest are listed, and a notification offers **Review** (opens the JSON Sync tab) or **Later**. |
 | Asset saved | Its JSON file is written. **Exception:** if the JSON has changes that are not reviewed yet, the file is left alone and a notification says so. The asset stays in the JSON Sync tab until you apply it there. A JSON that is only out of date (it has no changes of its own) is written as usual. |
 | Asset renamed | The JSON file moves with it. |
 | Asset deleted | The JSON file is deleted. |
@@ -159,6 +159,11 @@ Problems are shown as notifications, not only in the Output Log (category `LogJs
 - A JSON file cannot be written, or cannot be deleted when its asset is renamed or deleted.
 - An asset is renamed but its JSON cannot be read, so the file is not moved.
 - An apply is undone (the asset is listed again).
+
+After an apply, a notification lists the keys it changed for each asset. Its **Undo** button undoes the apply and opens the JSON
+Sync tab, where the assets are listed again. It works while the apply is the last change in the undo history; otherwise it says
+so, and you can use **Edit > Undo History**. After an automatic (Two Way) apply, the notification stays until you press
+**Dismiss** or **Undo**.
 - An asset is saved but its JSON is not written, because it has unreviewed changes or changed again after you reviewed it.
 
 ### The JSON Sync tab
@@ -272,11 +277,27 @@ UnrealEditor-Cmd.exe <Project>.uproject -run=JsonBlueprintSync -export|-import|-
   assets the values reached. It applies the whole file, whatever the mode, except for assets whose mode is None. `-nosave` skips
   saving.
 - `-verify` exits with an error if any JSON file differs from its asset, is missing, or has no asset. Use it in CI to catch assets
-  that were changed without re-exporting.
+  that were changed without re-exporting, or a JSON edited outside the editor and committed without its `.uasset`. It compares the
+  exact text, so a hand-edited JSON fails until the asset is saved in the editor (which rewrites the file in its own format).
 - `-jsondir` overrides the `JsonDir` setting.
 - Assets whose mode is None are skipped.
 
 In Git Bash, set `MSYS_NO_PATHCONV=1` so `/Game/...` arguments are not turned into Windows paths.
+
+### Verify script
+
+`Scripts/Verify.ps1` runs `-verify` and prints only the plugin's lines. Run it before you push:
+
+```powershell
+.\Plugins\JsonBlueprintSync\Scripts\Verify.ps1
+```
+
+- It finds the `.uproject` three folders up (the project the plugin is in) and the engine from the `.uproject`'s
+  `EngineAssociation` in the registry. Override them with `-Project` and `-EngineDir`, or set `UE_ENGINE_DIR`.
+- `-Dir` and `-JsonDir` are passed to the commandlet; `-FullLog` prints the whole editor log.
+- It exits with 0 if everything matches and 1 otherwise, so a hook or a build server can use it.
+- The editor binaries must be built. The editor may be open, but only saved assets are checked.
+- It takes about a minute, because it starts the editor headless.
 
 ## Limitations
 

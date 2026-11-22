@@ -78,6 +78,7 @@ Terms used below:
 
 ```
 JsonBlueprintSync.uplugin
+Scripts/Verify.ps1                   runs the commandlet's -verify (finds the project and the engine)
 Source/JsonBlueprintSync/
   JsonBlueprintSync.Build.cs
   Public/
@@ -476,6 +477,7 @@ and the subsystem never run together.
 | `UndoRedoTransactionId` | memory | the transaction being undone or redone, set by `MatchesContext` just before `PostUndo` / `PostRedo` |
 | `PendingRemovals` | memory | packages reported as removed, checked on the next tick |
 | `PendingNotification` | memory | the "N asset(s) differ" toast, so it can be replaced |
+| `AppliedNotification` | memory | the last "Applied JSON" toast, so a new apply replaces it and Undo closes it |
 | `bCacheLoadFailed` | memory | the cache could not be read; the first sync shows a toast and clears it |
 | `bCacheSaveFailed` | memory | the last cache save failed and its toast was shown; cleared by the next save that works |
 
@@ -594,7 +596,8 @@ request, then `OnPendingChanged`. With `bSave`:
    changed, the transaction is cancelled, so no empty undo step is left. The transaction's id (`GUndo->GetContext().TransactionId`)
    is kept for the assets it changed.
 4. `Resolve` each asset that succeeded, with the transaction id if the apply changed it, then save the cache.
-5. Toasts: "Applied JSON to … Not saved; Ctrl+Z reverts." and/or "Cannot apply the JSON of …".
+5. Toasts, as `Notice` says: `Manual` (the tab's Apply) and `Automatic` (Two Way) show `NotifyApplied`; `None` (Apply and Save)
+   shows nothing, since `ApplyJson` shows its own. "Cannot apply the JSON of …" is always shown.
 
 `Resolve(Package, Asset, TransactionId)`:
 
@@ -716,6 +719,15 @@ program holds it open).
   with Review (opens the tab) and Later (closes the toast) buttons. It is shown after every `SyncFromJson` that leaves something
   pending, including the Refresh button.
 - `NotifySaveSkipped` shows a 10 s toast with a Review button, and logs a warning.
+- `NotifyApplied` shows the success toast of an apply, replacing the previous one (`AppliedNotification`), and logs it:
+  - title "Applied JSON to … Not saved; Ctrl+Z reverts.", or "Applied JSON to … automatically (Two Way)…";
+  - sub-text: one line per asset with the keys `Apply` changed (up to six assets and six keys each, then "and N more");
+  - an **Undo** button if the apply has a transaction. A manual apply's toast fades out after 8 s (buttons in `CS_Success`); an
+    automatic one stays (`CS_None`; `CS_Pending` would show a throbber) and adds **Dismiss**.
+- `UndoApply(TransactionId)`, the Undo button, undoes only if `GEditor->Trans->GetUndoContext()` is still that transaction, so it
+  never undoes something else. It then calls `GEditor->UndoTransaction()`, which runs `PostUndo` as Ctrl+Z does (the assets are
+  pending again, with the undo toast), and opens the tab. If another change came after the apply, it shows a warning pointing to
+  Edit > Undo History.
 
 ### 2.8 The JSON Sync tab: SJsonSyncPanel
 
@@ -790,6 +802,11 @@ Caveats:
 - The commandlet does not read or write the editor's cache. The next editor start handles its changes: the file hashes no longer
   match the cache, so the files are compared again, match their assets, and are recorded.
 - In Git Bash, set `MSYS_NO_PATHCONV=1`, or `/Game/...` arguments are turned into Windows paths.
+
+`Scripts/Verify.ps1` wraps `-verify` for people: it finds the `.uproject` (three folders up), and the engine from `-EngineDir`,
+`UE_ENGINE_DIR`, or the registry (`HKLM:\SOFTWARE\EpicGames\Unreal Engine\<version>` for an installed engine,
+`HKCU:\SOFTWARE\Epic Games\Unreal Engine\Builds` for a source build). It prints only `LogJsonBlueprintSync` lines unless
+`-FullLog`, and passes the commandlet's exit code on.
 
 ### 2.10 Automation tests
 

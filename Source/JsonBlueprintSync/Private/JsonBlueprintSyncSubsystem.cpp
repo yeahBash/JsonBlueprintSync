@@ -5,6 +5,7 @@
 #include "JsonBlueprintSyncModule.h"
 #include "JsonBlueprintSyncSettings.h"
 #include "Editor.h"
+#include "Editor/Transactor.h"
 #include "FileHelpers.h"
 #include "Framework/Docking/TabManager.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -531,7 +532,7 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 	}
 	if (Requests.Num() > 0)
 	{
-		ApplyBatch(Requests, true);
+		ApplyBatch(Requests, EApplyNotice::Automatic);
 	}
 
 	ShowPendingNotification();
@@ -680,7 +681,7 @@ bool UJsonBlueprintSyncSubsystem::GetPendingView(const FString& PackageName, FPe
 
 bool UJsonBlueprintSyncSubsystem::ApplyJson(const FString& PackageName, const TArray<FString>& Keys, bool bSave)
 {
-	bool bResolved = ApplyBatch({ { PackageName, Keys } }, !bSave).Contains(PackageName);
+	bool bResolved = ApplyBatch({ { PackageName, Keys } }, bSave ? EApplyNotice::None : EApplyNotice::Manual).Contains(PackageName);
 	if (bResolved && bSave)
 	{
 		UObject* Asset = LoadAsset(PackageName);
@@ -711,7 +712,7 @@ bool UJsonBlueprintSyncSubsystem::ApplyJson(const FString& PackageName, const TA
 	return bResolved;
 }
 
-TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, bool bNotify)
+TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, EApplyNotice Notice)
 {
 	struct FItem
 	{
@@ -741,7 +742,7 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 	// A child's values are a delta on its parent, and a data asset's on its class, so parents go first.
 	Items.StableSort([](const FItem& A, const FItem& B) { return A.Order < B.Order; });
 
-	TArray<FString> Changed;
+	TArray<TPair<FString, TArray<FString>>> Changed;
 	TArray<FString> Succeeded;
 	TSet<FString> ChangedPackages;
 	FGuid TransactionId;
@@ -773,7 +774,7 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 			if (Result.Changed.Num() > 0)
 			{
 				MarkModified(Item.Asset);
-				Changed.Add(GetAssetName(Item.PackageName));
+				Changed.Add({ GetAssetName(Item.PackageName), Result.Changed });
 				ChangedPackages.Add(Item.PackageName);
 				UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s: applied %s"), *Item.PackageName, *FString::Join(Result.Changed, TEXT(", ")));
 			}
@@ -793,9 +794,9 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 	}
 	SaveCache();
 
-	if (bNotify && Changed.Num() > 0)
+	if (Notice != EApplyNotice::None && Changed.Num() > 0)
 	{
-		Notify(FText::Format(LOCTEXT("Applied", "Applied JSON to {0}. Not saved; Ctrl+Z reverts."), FText::FromString(JoinShort(Changed))), ENotice::Success);
+		NotifyApplied(Changed, TransactionId, Notice);
 	}
 	if (Failed.Num() > 0)
 	{
@@ -803,6 +804,78 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 			FText::FromString(JoinShort(Failed))), ENotice::Error);
 	}
 	return Succeeded;
+}
+
+void UJsonBlueprintSyncSubsystem::NotifyApplied(const TArray<TPair<FString, TArray<FString>>>& ChangedKeys, const FGuid& TransactionId,
+	EApplyNotice Notice)
+{
+	TArray<FString> Names;
+	TArray<FString> Lines;
+	for (const TPair<FString, TArray<FString>>& Pair : ChangedKeys)
+	{
+		Names.Add(Pair.Key);
+		Lines.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *JoinShort(Pair.Value, 6)));
+	}
+	constexpr int32 MaxLines = 6;
+	if (Lines.Num() > MaxLines)
+	{
+		const int32 More = Lines.Num() - MaxLines;
+		Lines.SetNum(MaxLines);
+		Lines.Add(FString::Printf(TEXT("and %d more"), More));
+	}
+
+	const bool bAutomatic = Notice == EApplyNotice::Automatic;
+	const FText NamesText = FText::FromString(JoinShort(Names));
+	const FText Title = bAutomatic
+		? FText::Format(LOCTEXT("AppliedAuto", "Applied JSON to {0} automatically (Two Way). Not saved; Ctrl+Z reverts."), NamesText)
+		: FText::Format(LOCTEXT("Applied", "Applied JSON to {0}. Not saved; Ctrl+Z reverts."), NamesText);
+	const FString SubText = FString::Join(Lines, TEXT("\n"));
+	UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s\n%s"), *Title.ToString(), *SubText);
+
+	CloseNotification(AppliedNotification);
+	FNotificationInfo Info(Title);
+	Info.SubText = FText::FromString(SubText);
+	Info.bUseSuccessFailIcons = true;
+	// An automatic apply changed assets without being asked, so its toast stays until dismissed.
+	Info.bFireAndForget = !bAutomatic;
+	Info.ExpireDuration = 8.0f;
+	// Buttons show only in the matching completion state. An automatic toast stays in CS_None (CS_Pending would show a throbber).
+	const SNotificationItem::ECompletionState ButtonState = bAutomatic ? SNotificationItem::CS_None : SNotificationItem::CS_Success;
+	if (TransactionId.IsValid())
+	{
+		Info.ButtonDetails.Add(FNotificationButtonInfo(
+			LOCTEXT("UndoApply", "Undo"),
+			LOCTEXT("UndoApplyTip", "Undo the apply and show the assets in the JSON Sync tab. Works while the apply is the last change in the undo history."),
+			FSimpleDelegate::CreateWeakLambda(this, [this, TransactionId]() { UndoApply(TransactionId); }),
+			ButtonState));
+	}
+	if (bAutomatic)
+	{
+		Info.ButtonDetails.Add(FNotificationButtonInfo(
+			LOCTEXT("Dismiss", "Dismiss"),
+			LOCTEXT("DismissTip", "Close this notification and keep the applied values."),
+			FSimpleDelegate::CreateWeakLambda(this, [this]() { CloseNotification(AppliedNotification); }),
+			ButtonState));
+	}
+	if (const TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info))
+	{
+		Item->SetCompletionState(ButtonState);
+		AppliedNotification = Item;
+	}
+}
+
+void UJsonBlueprintSyncSubsystem::UndoApply(const FGuid& TransactionId)
+{
+	CloseNotification(AppliedNotification);
+	if (!GEditor || !GEditor->Trans || GEditor->Trans->GetUndoContext().TransactionId != TransactionId)
+	{
+		Notify(LOCTEXT("UndoApplyNotLast", "Cannot undo the apply from here: other changes were made after it. Use Edit > Undo History."),
+			ENotice::Warning);
+		return;
+	}
+	// PostUndo puts the assets back in the pending list and shows its toast.
+	GEditor->UndoTransaction();
+	OpenSyncTab();
 }
 
 void UJsonBlueprintSyncSubsystem::Resolve(const FString& PackageName, UObject* Asset, const FGuid& TransactionId)
