@@ -762,8 +762,9 @@ program holds it open).
   - a detail line: the package, and, first match wins, the parse error, the two parents, the "JSON has no changes of its own" note,
     the "unknown which side changed, every key is a conflict" note, or how to choose;
   - the **key list** (multi-select): Key, JSON value, Asset value, Changed in (JSON / Asset / Conflict, with tooltips; Conflict in
-    orange), Use (JSON / Asset / **Choose** in orange). `(default)` in grey means the key is not set on that side. The value the
-    key uses has a highlighted background (the theme's primary colour); the other one is dimmed;
+    orange), Use (JSON in `AccentBlue`, Asset in `AccentGreen`, **Choose** in orange). `(default)` in grey means the key is not set on that side. The value the
+    key uses has a highlighted background (the theme's primary colour); the other one is dimmed. `SKeyRow::GetBorder` shows the
+    selection only while two or more rows are selected; a single selected row gets the normal row background;
   - below it: **All from JSON**, **All from Asset**, **Reset**, the counter "N conflicts to choose" (orange), **Show in Content
     Browser**, **Overwrite JSON** (only for an unreadable file), **Apply** and **Apply and Save** (primary).
 

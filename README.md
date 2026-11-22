@@ -194,7 +194,8 @@ status:
   press **Refresh**.
 
 Select an asset to see the keys that differ, as in a merge tool: the JSON value, the asset value, which side changed each key,
-and which value the key will use (**Use**). The used value is highlighted; the other one is dimmed.
+and which value the key will use (**Use**: JSON in blue, Asset in green, Choose in orange). The used value is highlighted; the other one is dimmed. Selected rows are highlighted
+only while several are selected (for the right-click below).
 
 | Changed in | Meaning | Uses by default |
 |---|---|---|

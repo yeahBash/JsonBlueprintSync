@@ -157,9 +157,9 @@ Expected:
 
 - The toast "JSON Sync: 1 asset(s) differ from their JSON" appears, with **Review** and **Later**.
 - **Review** opens the tab. `BP_SyncLamp` is listed with Type Blueprint and Status "1 keys".
-- The key `FlickerSpeed` has JSON value `4.0`, Asset value `2.500000`, Changed in **JSON**, and Use **JSON**. The JSON value
-  has a highlighted background; the asset value is dimmed. No conflict counter is shown, and **Apply** and **Apply and Save** are
-  enabled.
+- The key `FlickerSpeed` has JSON value `4.0`, Asset value `2.500000`, Changed in **JSON**, and Use **JSON** in blue (Asset would
+  be green, Choose orange). The JSON value has a highlighted background; the asset value is dimmed. No conflict counter is shown,
+  and **Apply** and **Apply and Save** are enabled.
 - `cache.json` has `"pending": true` for the asset, and `Saved/JsonBlueprintSync/Base/.../BP_SyncLamp.json` exists.
 
 2. Press **Apply**.
@@ -339,7 +339,8 @@ Expected: three Conflicts, "3 conflicts to choose".
 
 2. Ctrl+click `FlickerSpeed` and `Tint` on their key names, right-click, and choose **Use JSON**.
 
-Expected: the menu is headed "2 keys". Both use JSON; the counter reads "1 conflict to choose".
+Expected: while clicking, the two rows are highlighted as selected. The menu is headed "2 keys". Both use JSON; the counter reads
+"1 conflict to choose". Clicking a single value afterwards selects only that row, and it is not highlighted.
 
 3. Right-click `Light.Intensity` alone and choose **Use Asset**.
 

@@ -149,6 +149,25 @@ namespace
 			SMultiColumnTableRow<TSharedPtr<SJsonSyncPanel::FKeyItem>>::Construct(FSuperRowType::FArguments(), Owner);
 		}
 
+		/**
+		 * Only a multi-selection (Ctrl or Shift click, for the context menu) is highlighted. A single selected row, which every click on
+		 * a value makes, gets the normal row background: its highlight only competed with the one of the chosen value.
+		 */
+		virtual const FSlateBrush* GetBorder() const override
+		{
+			const TSharedPtr<ITypedTableView<TSharedPtr<SJsonSyncPanel::FKeyItem>>> Table = OwnerTablePtr.Pin();
+			if (Table.IsValid() && Table->Private_GetNumSelectedItems() <= 1 && IsItemSelected())
+			{
+				const bool bEven = IndexInList % 2 == 0;
+				if (IsHovered())
+				{
+					return bEven ? &Style->EvenRowBackgroundHoveredBrush : &Style->OddRowBackgroundHoveredBrush;
+				}
+				return bEven ? &Style->EvenRowBackgroundBrush : &Style->OddRowBackgroundBrush;
+			}
+			return SMultiColumnTableRow<TSharedPtr<SJsonSyncPanel::FKeyItem>>::GetBorder();
+		}
+
 		virtual TSharedRef<SWidget> GenerateWidgetForColumn(const FName& Column) override
 		{
 			const FKeyDiff& Diff = Item->Diff;
@@ -171,7 +190,13 @@ namespace
 						.ToolTipText_Lambda([Captured]() { return SourceTooltip(Captured->Source); })
 						.ColorAndOpacity_Lambda([Captured]()
 						{
-							return Captured->Source == EKeySource::None ? FStyleColors::Warning : FSlateColor::UseForeground();
+							// One colour per side, so the column reads at a glance; Choose is the warning colour.
+							switch (Captured->Source)
+							{
+							case EKeySource::Json:  return FStyleColors::AccentBlue;
+							case EKeySource::Asset: return FStyleColors::AccentGreen;
+							default:                return FStyleColors::Warning;
+							}
 						})
 					];
 			}
