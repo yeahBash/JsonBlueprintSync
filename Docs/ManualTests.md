@@ -21,7 +21,8 @@ They check that it behaves as documented, not that it is ideal.
 - [11. PIE and line endings](#11-pie-and-line-endings)
 - [12. Commandlet](#12-commandlet)
 - [13. `.uasset` changes and reparenting](#13-uasset-changes-and-reparenting)
-- [14. Cleanup](#14-cleanup)
+- [14. Notifications for problems](#14-notifications-for-problems)
+- [15. Cleanup](#15-cleanup)
 
 ## 0. Automated tests
 
@@ -32,7 +33,7 @@ Close the editor, or run them from a second shell while it is open (it is slower
   -ExecCmds="Automation RunTests JsonBlueprintSync;Quit" -unattended -nullrhi -nosplash
 ```
 
-Expected: 13 tests, each logging `Result={Success}`, and no `Result={Fail}`. The full log is in `Saved/Logs/<Project>.log`.
+Expected: 14 tests, each logging `Result={Success}`, and no `Result={Fail}`. The full log is in `Saved/Logs/<Project>.log`.
 To filter it: `Select-String -Path Saved\Logs\<Project>.log -Pattern "Result=\{"`.
 
 In the editor you can also run them from **Tools > Test Automation**: filter by `JsonBlueprintSync`, tick the group and press
@@ -177,12 +178,25 @@ Expected: the file now reads `"FlickerSpeed": "4.000000"` (canonical form), and 
 
 Expected: the asset is listed again with the same key. The change is not lost.
 
-**3.3 Undo after Apply (known issue)**
+**3.3 Undo after Apply**
 
 1. Repeat 3.1 up to **Apply JSON** (value `"6.0"`). Press Ctrl+Z.
 
-Expected: `FlickerSpeed` goes back to its old value. The asset is **not** listed again. Saving it writes the old value to the JSON,
-which discards the JSON change. To review again, edit the JSON again and press Refresh.
+Expected:
+
+- `FlickerSpeed` goes back to its old value.
+- A warning toast "JSON Sync: undo reverted the JSON applied to BP_SyncLamp. It is back in the JSON Sync tab…".
+- The asset is listed again with `FlickerSpeed` Changed in **JSON**, ticked, as before the apply. The base file is back and the cache
+  has `"pending": true`.
+
+2. Press Ctrl+Y.
+
+Expected: `FlickerSpeed` is 6.0 again and the asset leaves the tab (no toast).
+
+3. Press Ctrl+Z again, then save the Blueprint.
+
+Expected: the "Saved BP_SyncLamp, but did not write its JSON: the JSON has changes you have not reviewed" toast. The JSON still
+reads `"6.0"`. Press **Apply JSON** and save to finish.
 
 **3.4 JSON edited while the editor is open**
 
@@ -275,6 +289,35 @@ Expected: `Nope` is listed (JSON `1`, Asset `(default)`).
 
 Expected: the asset is applied. Since nothing changed, the JSON is rewritten at once without `Nope`.
 
+**3.14 JSON changes between Apply and Save**
+
+1. Change `FlickerSpeed` in the JSON to `"10.0"` and `Light.Intensity` to `"8100.0"`. Refresh.
+2. Untick `Light.Intensity` and press **Apply JSON**. Do not save.
+3. Change `Tint` in the JSON (e.g. `"(R=0.0,G=1.0,B=0.0,A=1.0)"`). Do **not** Refresh. Save the Blueprint.
+
+Expected:
+
+- The toast "Saved BP_SyncLamp, but did not write its JSON: the JSON changed again after you reviewed it", with Review.
+- The JSON still has your `Tint` edit.
+- The asset is listed with `Tint` Changed in **JSON** (ticked) and `Light.Intensity` Changed in **Asset** (unticked: the value you
+  kept). `FlickerSpeed` is not listed.
+
+4. Press **Apply JSON** and save.
+
+Expected: the JSON has the new `Tint`, `FlickerSpeed` `10.000000`, and the old `Light.Intensity`.
+
+**3.15 Refresh after Apply**
+
+1. Change `FlickerSpeed` in the JSON to `"11.0"` and `Light.Intensity` to `"8200.0"`. Refresh. Untick `Light.Intensity`, Apply JSON.
+   Do not save.
+2. Press **Refresh**.
+
+Expected: the asset is not listed again (no every-key Conflict list).
+
+3. Change `Tint` in the JSON and press **Refresh**.
+
+Expected: listed as in 3.14 step 3, with the normal pending toast. Saving now does not write the JSON.
+
 ## 4. Bad files
 
 Each of these leaves the asset listed and changes nothing in it. After each one, restore the file (or use **Overwrite JSON**).
@@ -348,6 +391,25 @@ Expected: applied automatically, as in 5.1.
 
 Expected: `PDA_SyncItem` is listed (Blueprints are not Two Way). After Apply JSON, `DA_SyncItem` follows if it does not override
 `Damage`, and keeps its own value if it does.
+
+**5.6 Undo of an automatic apply**
+
+1. Close the editor. In `DA_SyncItem.json`, set `"Damage": "21.0"`. Start the editor; it is applied as in 5.1.
+2. Press Ctrl+Z.
+
+Expected: Damage goes back, the undo warning toast appears, and `DA_SyncItem` is listed with `Damage` Changed in JSON.
+
+3. Press **Refresh**.
+
+Expected: it is **not** applied again (the log says its last apply was undone). It stays listed.
+
+4. Change `Damage` in the JSON to `"22.0"` and press **Refresh**.
+
+Expected: applied automatically (a new file).
+
+5. Press Ctrl+Z, close the editor, choose **Don't Save**, and start it again.
+
+Expected: applied automatically again: undos are only remembered for the session.
 
 ## 6. No base
 
@@ -515,7 +577,8 @@ and delete the test folder.
 
 1. Start Play In Editor. Run `JsonBlueprintSync.Sync`.
 
-Expected: a log warning that the check does not run during Play In Editor. Nothing else happens.
+Expected: a warning toast (yellow triangle) that JSON files are not checked during Play In Editor. Nothing else happens. The same
+for **Refresh** in the JSON Sync tab.
 
 **11.2 CRLF files**
 
@@ -700,7 +763,55 @@ Expected: listed as "0 keys, parent differs". Apply JSON or Overwrite JSON write
 
 Expected: nothing is listed, and `cache.json` has the `"asset"` fields again.
 
-## 14. Cleanup
+## 14. Notifications for problems
+
+Each of these used to be reported only in the Output Log.
+
+**14.1 Unreadable cache**
+
+1. Close the editor. Replace the contents of `Saved/JsonBlueprintSync/cache.json` with `not json`. Start.
+
+Expected: an error toast "JSON Sync: cannot read …cache.json, so the last sync is unknown…". Assets whose JSON differs from the
+asset are listed with every key as Conflict. `cache.json` is valid again afterwards.
+
+**14.2 Read-only cache**
+
+1. Mark `cache.json` read-only (Properties > Read-only). Change `FlickerSpeed` on `BP_SyncLamp` and save.
+
+Expected: the JSON is written, and an error toast "JSON Sync: cannot write …cache.json. Is it read-only?…".
+
+2. Change it again and save.
+
+Expected: no new toast (only a log warning).
+
+3. Clear the read-only flag, change it again and save.
+
+Expected: no toast; `cache.json` is updated. Making it read-only again shows the toast again on the next save.
+
+**14.3 Asset that cannot be loaded**
+
+1. Close the editor. Copy `BP_SyncLamp.json` to `BP_SyncNotAsset.json`, set its `"asset"` to `/Game/JsonSyncTest/BP_SyncNotAsset`,
+   and create an empty file `Content/JsonSyncTest/BP_SyncNotAsset.uasset`. Start.
+
+Expected: the error toast "JSON Sync: 1 JSON files could not be checked", and the log names the package (as "no asset" or "cannot
+load the asset", depending on whether the registry lists the broken file). Delete both files afterwards.
+
+**14.4 Rename with an unreadable JSON**
+
+1. Put `<<<<<<< HEAD` on the first line of `BP_SyncLamp.json`. Rename `BP_SyncLamp` to `BP_SyncLamp2` in the Content Browser.
+
+Expected: a warning toast "renamed BP_SyncLamp to BP_SyncLamp2, but its JSON cannot be read (…), so it was not moved". The old file
+is still there. Saving `BP_SyncLamp2` writes `BP_SyncLamp2.json`. Delete the old file and rename the asset back.
+
+**14.5 JSON that cannot be deleted**
+
+1. Duplicate `DA_SyncItem` and save the copy. In PowerShell, hold its JSON open:
+   `$f = [IO.File]::Open("<path to the copy's JSON>", 'Open', 'Read', 'None')`
+2. Delete the copy in the Content Browser.
+
+Expected: an error toast "JSON Sync: cannot delete … Is it open in another program?". Run `$f.Close()` and delete the file by hand.
+
+## 15. Cleanup
 
 1. Delete the `JsonSyncTest` folder in the Content Browser.
 

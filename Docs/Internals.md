@@ -69,7 +69,9 @@ Terms used below:
   header on load. The asset registry has it for every package without loading it (`FAssetPackageData::GetPackageSavedHash`).
 - **Pending**: the asset's JSON has changes that are not applied or discarded yet. The asset is listed in the JSON Sync tab and
   saving it does not write its JSON.
-- **Resolved**: the user applied or overwrote the JSON in this session, but the asset has not been saved since.
+- **Resolved**: the user applied or overwrote the JSON in this session, but the asset has not been saved since. The plugin
+  remembers which file the user reviewed, so a file that changes again before the save is not overwritten.
+- **Undone**: an Apply JSON that was undone with Ctrl+Z. The asset is pending again, as before the apply.
 - **Synced kind**: the asset is a Blueprint, Widget Blueprint or data asset, and the mode for that kind is not None.
 
 ## 2. Files
@@ -448,7 +450,8 @@ Loading:
 - A missing file gives an empty cache.
 - A `version` other than 2 also gives an empty cache, without an error. The hashes of an old cache are of schema-1 files, which no
   longer load.
-- Unreadable or broken JSON makes `Load` return false and leaves the cache empty. The subsystem logs a warning and carries on.
+- Unreadable or broken JSON makes `Load` return false and leaves the cache empty. The subsystem logs a warning, carries on, and
+  shows an error toast at the first sync (see [Notifications](#notifications)).
 
 `Save` writes the entries sorted, and writes `pending` only when it is true. `Remove(Package)` also deletes the base file.
 
@@ -467,20 +470,27 @@ and the subsystem never run together.
 | Member | Lives | Holds |
 |---|---|---|
 | `Cache` | disk (`Saved/`) | `FSyncCache`: JSON hash, saved hash and pending flag per package, plus base files |
-| `Pending` | memory | package → `FPending { Kind, File (parsed doc, unset if broken), Error, Base (unset if unknown) }`. Mirrors the cache's pending entries once a sync has run. |
-| `Resolved` | memory, this session only | packages applied or overwritten but not saved since. Their next save skips the save guard. |
+| `Pending` | memory | package → `FPending { Kind, File (parsed doc, unset if broken), Error, Base (unset if unknown), FileHash (of the file compared) }`. Mirrors the cache's pending entries once a sync has run. |
+| `Resolved` | memory, this session only | package → `FResolved { Kind, FileHash, ReviewedFile, Before, TransactionId }` for assets applied or overwritten but not saved since. `FileHash` and `ReviewedFile` are the file the user reviewed; `Before` is the pending state before Apply JSON (unset for Overwrite JSON); `TransactionId` is the Apply JSON transaction, if it changed the asset. |
+| `Undone` | memory, this session only | the same records for applies that were undone, so that a redo can resolve them again and Two Way does not re-apply the same file |
+| `UndoRedoTransactionId` | memory | the transaction being undone or redone, set by `MatchesContext` just before `PostUndo` / `PostRedo` |
 | `PendingRemovals` | memory | packages reported as removed, checked on the next tick |
 | `PendingNotification` | memory | the "N asset(s) differ" toast, so it can be replaced |
+| `bCacheLoadFailed` | memory | the cache could not be read; the first sync shows a toast and clears it |
+| `bCacheSaveFailed` | memory | the last cache save failed and its toast was shown; cleared by the next save that works |
 
 #### Initialize and Deinitialize
 
 `Initialize`:
 
-1. Loads the cache.
+1. Loads the cache. If it cannot be read, it starts with an empty one and sets `bCacheLoadFailed`. It is too early for a toast.
 2. Subscribes to `UPackage::PackageSavedWithContextEvent` and to the asset registry's `OnAssetRenamed` and `OnAssetRemoved`.
 3. If the registry is still scanning, waits for `OnFilesLoaded`. Otherwise it waits one tick. Either way it then calls
    `SyncFromJson`.
-4. Registers the console command `JsonBlueprintSync.Sync` (→ `SyncFromJson`).
+4. Registers for undo and redo (`GEditor->RegisterForUndo`; the subsystem is an `FEditorUndoClient`).
+5. Registers the console command `JsonBlueprintSync.Sync` (→ `SyncFromJson`).
+
+`OnFilesLoaded` shows the error toast for an unreadable cache, if any, then calls `SyncFromJson`.
 
 `Deinitialize` undoes all of this and closes the toast.
 
@@ -488,20 +498,26 @@ and the subsystem never run together.
 
 This runs at start-up, on `JsonBlueprintSync.Sync` and on the tab's Refresh button.
 
-1. Refuses during Play In Editor (logs a warning).
+1. Refuses during Play In Editor, with a warning toast.
 2. For every JSON file under `<JsonRoot>/Game`:
    1. Map the file to a package. Failure, or an unreadable file, is an error ("cannot read the file").
    2. Get the package's saved hash (`GetSavedHash`): from the package if it is loaded, else from the asset registry. The asset is
       **changed** if the entry has an `AssetHash`, the saved hash is known, and they differ.
-   3. **Skip** the file, without loading anything, if the cache has a non-pending entry with the same JSON hash and the asset has
-      not changed. This is what keeps start-up cheap. An entry without an `AssetHash` (from an older plugin version) adopts the
+   3. **Skip** a resolved asset whose file is still the reviewed one (same hash as `FResolved::FileHash`): its next save writes
+      the JSON.
+   4. **Skip** the file, without loading anything, if the asset is not resolved, the cache has a non-pending entry with the same
+      JSON hash and the asset has not changed. This is what keeps start-up cheap. An entry without an `AssetHash` (from an older plugin version) adopts the
       current saved hash here, so detection works from then on.
-   4. Find the package's main asset in the registry. If there is none, report an error ("no asset").
-   5. If the asset's kind is not synced (mode None), drop any pending state it had and move on.
-   6. Call `Detect` with the asset-changed flag. If the asset became or stayed pending and its mode is Two Way, remember it for
-      auto-apply.
+   5. Find the package's main asset in the registry. If there is none, report an error ("no asset").
+   6. If the asset's kind is not synced (mode None), drop any pending, resolved or undone state it had and move on.
+   7. A resolved asset whose file changed after the review becomes pending with the reviewed file as the base
+      (`MarkChangedAfterReview`, see [OnPackageSaved](#onpackagesaved-write-on-save-and-the-save-guard)). Any other asset goes to
+      `Detect` with the asset-changed flag.
+   8. If the asset became or stayed pending and its mode is Two Way, remember it for auto-apply, unless it is in `Undone` with the
+      same file hash: the user undid the apply of this very file. A file that changed since is applied as usual.
 3. Pending assets whose JSON file no longer exists are dropped: there is nothing left to review.
-4. Save the cache, log a summary, and show one error toast if any file could not be checked.
+4. Save the cache, log a summary, and show one error toast if any file could not be checked: unreadable, no asset, or (from
+   `Detect`) the asset cannot be loaded. Each is logged as an error. Nothing is recorded for them, so the next sync tries again.
 5. **Two Way auto-apply.** For each remembered asset, get the view (see below). The asset is applied only if the file parses and
    `CanAutoApply` agrees:
    - there is a base;
@@ -515,8 +531,9 @@ This runs at start-up, on `JsonBlueprintSync.Sync` and on the tab's Refresh butt
 
 #### Detect: one changed file
 
-`Detect(Package, Text, Hash, Kind, bAssetChanged)` loads the asset, captures it as `Current` and parses the file. It runs when the
-JSON or the `.uasset` changed (or the asset is pending).
+`Detect(Package, Text, Hash, Kind, bAssetChanged, Errors)` loads the asset, captures it as `Current` and parses the file. It runs
+when the JSON or the `.uasset` changed (or the asset is pending). If the asset cannot be loaded, it adds an error to `Errors` and
+returns.
 
 **If the file parses, its `parent` agrees with the asset's, and `ValuesEqual(File, Current)`**, the two sides agree, e.g. a teammate
 committed both, or only the asset's graph changed. The asset is removed from `Pending`, and then:
@@ -540,7 +557,8 @@ were closed without saving. Then the asset on disk would differ from the file, b
 | `Current` | `Current`, saved as the base file. Every differing key shows as `Json`. |
 | `None` | none: every key is a conflict |
 
-A parent mismatch is logged as a warning. The entry becomes `{old hashes or "", pending}`. The asset is added to `Pending` and removed from `Resolved`. The differing keys are
+A parent mismatch is logged as a warning. The entry becomes `{old hashes or "", pending}`. The asset is added to `Pending` (with the
+file's hash) and removed from `Resolved`. The differing keys are
 logged. A broken file is logged as a warning and is pending with its error.
 
 Note that Detect loads every asset whose JSON or `.uasset` changed. After a large pull this can take a while at start-up.
@@ -562,23 +580,44 @@ in-memory values. `IsJsonOutOfDate()` is true when there is a base and every key
 2. Sort by `GetApplyOrder` (stable): parents first, data assets last.
 3. Inside one `FScopedTransaction("Apply JSON")`, call `Apply` for each. Warnings and errors go to the log. A failed asset is skipped,
    stays pending, and the others go on. Changed assets are `MarkModified`. **Nothing is compiled and nothing is saved.** If nothing
-   changed, the transaction is cancelled, so no empty undo step is left.
-4. `Resolve` each asset that succeeded, then save the cache.
+   changed, the transaction is cancelled, so no empty undo step is left. The transaction's id (`GUndo->GetContext().TransactionId`)
+   is kept for the assets it changed.
+4. `Resolve` each asset that succeeded, with the transaction id if the apply changed it, then save the cache.
 5. Toasts: "Applied JSON to … Not saved; Ctrl+Z reverts." and/or "Cannot apply the JSON of …".
 
-`Resolve(Package, Asset)`:
+`Resolve(Package, Asset, TransactionId)`:
 
-1. Remove the package from `Pending`, delete its base, and clear the pending flag. The hash is kept, because it still describes the
-   last file that matched the saved asset.
-2. If the asset is now dirty, add it to `Resolved`. Its next save writes the JSON, including the keys where the user kept the
-   asset's value.
+1. Remove the package from `Pending` and `Undone`, delete its base, and clear the pending flag. The hash is kept, because it still
+   describes the last file that matched the saved asset.
+2. If the asset is now dirty, add it to `Resolved` with the reviewed file (the pending state's `File` and `FileHash`), the pending
+   state itself as `Before`, and the transaction id. Its next save writes the JSON, including the keys where the user kept the
+   asset's value, as long as the file is still the reviewed one.
 3. If it is not dirty (nothing changed, e.g. the user unticked every key), write the JSON **now**. Otherwise no save would ever
    write it. In effect, applying with nothing ticked is the same as Overwrite JSON.
 
+#### Undo and redo
+
+The subsystem is an `FEditorUndoClient`. Unreal calls `MatchesContext` with the transaction being undone or redone, then
+`PostUndo` or `PostRedo`. `MatchesContext` stores the transaction id and accepts every transaction.
+
+`PostUndo`: every resolved asset whose `TransactionId` is the undone transaction goes back to its `Before` state: `MarkPending`
+restores it to `Pending`, sets the cache's pending flag and stores its base again. The record moves to `Undone`. A warning toast
+says the asset is back in the tab, and the tab refreshes. Without this, the asset would stay dirty (Unreal's undo does not clear
+dirty flags) and its next save would write its old values over the JSON change.
+
+Undoing an unrelated transaction does nothing, even if it touches a resolved asset: an edit made after the apply is the user's.
+
+`PostRedo`: every `Undone` record with the redone transaction is resolved again, if the asset is still pending with the same file
+hash. Records for that transaction are dropped either way. This is only logged.
+
+A Two Way asset in `Undone` is not auto-applied again while its file is the one that was undone. `Undone` is not saved, so the next
+editor start applies it again.
+
 #### OverwriteJson
 
-OverwriteJson loads the asset and clears the pending state the same way as `Resolve`, adding the asset to `Resolved` if it is dirty.
-It then writes `Capture(asset)` to the file. It also works when the file is broken, which is the way out of an unparsable file
+OverwriteJson loads the asset and clears the pending state the same way as `Resolve`. It then writes `Capture(asset)` to the file
+and, if the asset is dirty, adds it to `Resolved` with the file now on disk as the reviewed file (the one just written, or the old
+one if the write failed). It has no transaction, so there is nothing to undo. It also works when the file is broken, which is the way out of an unparsable file
 besides fixing it.
 
 Caveat: if the asset has unsaved edits, the file gets the **unsaved** values. If you then close the editor without saving, the file
@@ -589,7 +628,7 @@ JSON changes.
 
 WriteJson calls `SaveFileIfChanged(Path, Capture(asset))`. A write failure shows "Cannot write … Is it read-only?". Then, **only if
 the asset is not dirty**, it records `{hash of what was written, package saved hash, not pending}`, removes the asset from
-`Resolved` and saves the cache. The save event fires after Unreal clears the dirty flag and sets the new saved hash, so a normal save
+`Resolved` and `Undone` and saves the cache. The save event fires after Unreal clears the dirty flag and sets the new saved hash, so a normal save
 records the sync.
 
 #### OnPackageSaved: write on save and the save guard
@@ -604,16 +643,22 @@ The save event fires for every saved package. The handler returns at the first c
      out of date: `OverwriteJson`, which clears the pending state and writes the file;
    - otherwise skip writing, and show "Saved X, but did not write its JSON: the JSON has changes you have not reviewed" with a
      Review button.
-5. **Save guard**: if the asset is not in `Resolved`, the file exists and its hash differs from the cache entry (or there is no
-   entry), the file changed since the last sync without the plugin seeing it (a pull with the editor open and no Refresh, a hand
+5. **Resolved**: the file may differ from the last sync, but it must still be the reviewed file.
+   - If the file exists and its hash differs from `FResolved::FileHash`, it changed after the review (a pull with the editor open
+     and no Refresh, a hand edit). `MarkChangedAfterReview` makes the asset pending with the **reviewed file as the base**: keys
+     the new file changed are `Json`, the values the user kept or edited since are `Asset`, and a key both changed is `Both`. The
+     base is stored, so this survives a restart. The toast reads "Saved X, but did not write its JSON: the JSON changed again
+     after you reviewed it", with a Review button.
+   - Otherwise (same file, or no file) `WriteJson`.
+6. **Save guard**: if the file exists and its hash differs from the cache entry (or there is no entry), the file changed since the last sync without the plugin seeing it (a pull with the editor open and no Refresh, a hand
    edit, another tool). Writing now would silently discard that change. So:
    - if the file parses and its values equal the asset's, write: nothing would be lost, and this only normalizes the file;
    - otherwise, mark it **pending without a base** (`MarkPending`), show the skipped-save toast and refresh the tab. There is no
      base because the asset has been edited since the file changed, so either side may have changed any key.
-6. Otherwise, `WriteJson`.
+7. Otherwise, `WriteJson`.
 
-`Resolved` skips step 5 on purpose: after Apply JSON the file still differs from the cached hash, and the save that follows is
-meant to write it.
+Resolved assets get step 5 instead of the save guard: after Apply JSON the file still differs from the cached hash, and the save
+that follows is meant to write it.
 
 #### OnAssetRenamed
 
@@ -621,7 +666,9 @@ This also covers moves.
 
 1. Only for synced kinds whose old package is under `/Game` and actually changed.
 2. Drop the old package's pending and resolved state. A pending rename is lost; the renamed asset is not pending.
-3. If the old file cannot be loaded, just remove the old cache entry.
+3. If there is no old file, just remove the old cache entry. If it exists but cannot be read or parsed (e.g. a merge conflict),
+   it is left at the old path, the old cache entry is removed, and a warning toast says so. Saving the renamed asset writes a new
+   file; the old one gives a "no asset" error at every sync until it is fixed or deleted.
 4. Otherwise, write the file at the new path with `asset` updated, **unless a file already exists there**. In that case the renamed
    package was already saved and its JSON is newer. Then delete the old file and remove the old cache entry. No entry is created for
    the new package: its next save creates it (see [weak spots](#6-weak-spots)).
@@ -632,9 +679,25 @@ The registry reports removals mid-operation, also for in-memory packages and dur
 package and checks it on the next tick. Only if the package file is gone (`!DoesPackageExist`) does it delete the JSON file and
 remove the cache entry, the pending state and the resolved state.
 
+Both use `DeleteJsonFile`, which deletes read-only files too and shows an error toast if the file cannot be deleted (e.g. another
+program holds it open).
+
 #### Notifications
 
-- `Notify(Text, bError)` logs (Error or Display) and shows a toast: 6 s, or 10 s for errors.
+- `Notify(Text, Level)` logs and shows a toast. `ENotice::Success`: check mark, 6 s, logged as Display. `Warning`: warning icon,
+  8 s, logged as Warning. `Error`: red cross, 10 s, logged as Error.
+- Toasts for problems:
+
+  | Toast | Level | When |
+  |---|---|---|
+  | "N JSON files could not be checked" | Error | a sync found unreadable files, files with no asset, or assets that cannot be loaded |
+  | "cannot read cache.json" | Error | at the first sync, if `Initialize` could not read the cache |
+  | "cannot write cache.json" | Error | the first failed cache save; later failures are only logged until a save works |
+  | "cannot write / delete <file>" | Error | a JSON file cannot be written (save, Overwrite JSON, rename) or deleted (rename, delete) |
+  | "renamed A to B, but its JSON cannot be read" | Warning | rename of an asset whose JSON does not parse |
+  | "not checked during Play In Editor" | Warning | the console command or Refresh during PIE |
+  | "Cannot apply the JSON of …" | Error | an apply failed |
+
 - `ShowPendingNotification` replaces the previous "N asset(s) differ" toast with a sticky one: up to eight names, then "and N more",
   with Review (opens the tab) and Later (closes the toast) buttons. It is shown after every `SyncFromJson` that leaves something
   pending, including the Refresh button.
@@ -704,7 +767,7 @@ Caveats:
 
 ### 2.10 Automation tests
 
-`Private/Tests/JsonBlueprintSyncTests.cpp` holds 13 tests under `JsonBlueprintSync.*`. They are compiled only with
+`Private/Tests/JsonBlueprintSyncTests.cpp` holds 14 tests under `JsonBlueprintSync.*`. They are compiled only with
 `WITH_DEV_AUTOMATION_TESTS`. They build their own Blueprints, Widget Blueprints and data assets in `/Temp` packages marked
 `PKG_InMemoryOnly`, so they never touch project content or the JSON folder.
 
@@ -717,6 +780,7 @@ Caveats:
 | `MissingKeyResets` | keys missing from the document go back to the archetype; children follow |
 | `Merge` | `DiffKeys` classification (Json, Asset, Both, no base), `TakeKeys` + `Apply` keeps the local change |
 | `TakeKeys` | take, remove, drop empty objects, slot keys split at the last dot; `ValuesEqual` ignores asset and parent |
+| `ChangedAfterReview` | with the reviewed file as the base, a later file change is `Json`, a kept asset value is `Asset`, both is `Both`; `CanAutoApply` on each |
 | `Cache` | cache and base round trip (including the asset hash), an old cache version is dropped, a broken cache reports failure |
 | `BaseChoice` | `ChooseBase` for every rule, `CanAutoApply` (base, parent, conflict, out of date, no keys), an out-of-date JSON diffs as `Asset` keys |
 | `Settings` | defaults, Two Way refused for Blueprints and Widget Blueprints, None |
@@ -724,8 +788,8 @@ Caveats:
 | `InheritedComponent` | child override created through the inheritable component handler, exported as a delta, reset back to the parent |
 | `Widget` | widgets and slots captured, applied to the Designer templates and the compiled tree, reset, unknown widget rejected |
 
-What the tests do **not** cover: the subsystem itself (save guard, Detect, start-up and saved hashes, Two Way auto-apply, rename,
-delete), the tab, the commandlet, and native (C++) components. Its decision rules are covered through `ChooseBase` and
+What the tests do **not** cover: the subsystem itself (save guard, Detect, start-up and saved hashes, Two Way auto-apply, undo and
+redo, rename, delete), the tab, the commandlet, and native (C++) components. Its decision rules are covered through `ChooseBase` and
 `CanAutoApply`. [ManualTests.md](ManualTests.md) covers those by hand.
 
 ## 3. End-to-end flows
@@ -778,8 +842,10 @@ package. A Refresh before the reload compares the file with the old in-memory va
 
 1. Select the asset. The keys are listed with their default ticks.
 2. Apply JSON → `TakeKeys(Capture, File, ticked)` → `Apply` in one transaction → `MarkModified` → `Resolve`.
-3. The asset is modified and in `Resolved`. Ctrl+S → `OnPackageSaved` → not pending, and `Resolved` skips the guard → `WriteJson`
-   writes the merged values (ticked keys from the JSON, the rest from the asset) and records the hash.
+3. The asset is modified and in `Resolved`. Ctrl+S → `OnPackageSaved` → not pending, resolved, and the file is still the reviewed
+   one → `WriteJson` writes the merged values (ticked keys from the JSON, the rest from the asset) and records the hash.
+4. Had the user pressed Ctrl+Z before saving, `PostUndo` would have put the asset back in `Pending` and the save would have skipped
+   the JSON.
 
 ### Renaming
 
@@ -816,7 +882,8 @@ package. A Refresh before the reload compares the file with the old in-memory va
 | Synced | `{H, A}` | no | no | no | writes (guard if the file's hash ≠ H) |
 | Pending with base | `{H, A, pending}` | yes | yes | no | skipped with a toast, unless the file's hash is still H (then written) |
 | Pending without base | `{H or "", A or "", pending}` | no | yes | no | skipped with a toast, unless the file's hash is still H |
-| Resolved | `{H, A}` | no | no | yes | writes, no guard |
+| Resolved | `{H, A}` | no | no | yes | writes if the file is still the reviewed one; otherwise pending with the reviewed file as base, and a toast |
+| Undone | `{H, A, pending}` | as before the apply | yes | no (in `Undone`) | skipped with a toast, as for pending |
 
 `H` is the JSON hash and `A` the package's saved hash at the last sync. A synced entry is left alone at start-up only while the file
 hashes to `H` and the package's saved hash is `A`.
@@ -862,13 +929,20 @@ is never skipped by the hash check.
 - *Unknown key in the JSON* (e.g. a renamed variable): ticked, the apply fails. Unticked, the apply succeeds, and the next save
   removes the key from the JSON.
 - *Nothing ticked*: the asset keeps every value, and the JSON is overwritten at once (asset not dirty) or on the next save.
-- *Ctrl+Z after Apply JSON or a Two Way auto-apply*: the values go back, but the pending state does **not** come back. The asset
-  is still dirty (Unreal's undo does not clear dirty flags), so saving it writes the old values to the JSON and discards the JSON
-  change. To review again, use Overwrite JSON or edit the JSON again.
+- *Ctrl+Z after Apply JSON or a Two Way auto-apply*: the values go back and the asset is pending again, with the base it had
+  before, and a warning toast. Saving it does not write the JSON. Ctrl+Y resolves it again.
+- *Ctrl+Z of a Two Way auto-apply, then a restart*: `Undone` is not kept, so the next start applies the file again. Use Overwrite
+  JSON to keep the asset's values.
+- *Ctrl+Z after Apply JSON, then edits, then Ctrl+Y*: Unreal drops the redo history when you edit, so there is nothing to redo. The
+  asset stays pending.
+- *Ctrl+Z of a later edit (not the apply)*: nothing changes in the sync state. The asset stays resolved.
 - *Apply, then close the editor without saving*: the cache still has the old hash, so the next start detects the file again and
   lists it (or Two Way applies it again).
-- *Apply, then the JSON changes again before saving*: if a Refresh sees it, the asset is pending again. If not, `Resolved` skips the
-  save guard and the save overwrites the newer file.
+- *Apply, then the JSON changes again before saving*: the save (or a Refresh before it) notices that the file is no longer the
+  reviewed one. The asset is pending again with the reviewed file as the base, so the new changes are ticked `Json` keys and the
+  values the user kept are `Asset` keys. The save does not write the JSON. A Two Way asset is applied again at the Refresh if
+  nothing conflicts.
+- *Apply, then Refresh with nothing new*: the asset is skipped; it is not listed again.
 - *Applying a parent Blueprint*: child Blueprints, data assets of the class and placed actors that inherit the value are modified
   too, and their packages and levels become dirty. Overrides are kept.
 - *Widget Blueprints*: the Designer updates at once. The compiled widget tree updates on the next compile, which PIE does for dirty
@@ -882,6 +956,8 @@ is never skipped by the hash check.
   differing key as Conflict and decide each one.
 - *Read-only JSON file* (e.g. Perforce-style locking): the write fails with a toast. The cache is not updated, so the next save
   tries again.
+- *Read-only or locked `cache.json`*: one error toast. Sync state from this session is not kept; the next start compares the
+  changed files again, and assets pending only in this session are listed without a base.
 - *Autosave*: ignored. JSON is written only on a real save.
 
 **Settings**
@@ -906,28 +982,27 @@ is never skipped by the hash check.
 
 **PIE**
 
-- The start-up check, the console command and Refresh refuse to run during PIE. Saving during PIE still writes JSON.
+- The start-up check, the console command and Refresh refuse to run during PIE, with a warning toast. Saving during PIE still
+  writes JSON.
 
 ## 6. Weak spots
 
 These are behaviours that may surprise you, ordered roughly by how likely they are to matter. None of them loses data silently except
 where noted.
 
-1. **Undo does not restore the pending state** ([corner cases](#5-corner-cases)). After Ctrl+Z of an Apply JSON, saving discards
-   the JSON's change without a warning. This is the one way to lose a JSON change without a prompt.
-2. **`Resolved` bypasses the save guard** until the next save. A JSON change that arrives between Apply JSON and Save, with no
-   Refresh in between, is overwritten.
-3. **Rename then edit before saving.** The renamed asset has no cache entry. Its first save goes through the save guard. If you
+1. **Rename then edit before saving.** The renamed asset has no cache entry. Its first save goes through the save guard. If you
    edited the asset after the rename, the values differ from the moved file, and the save is reported as "did not write its JSON"
    (pending, no base) although nothing came from outside. Resolve it with Overwrite JSON.
-4. **No file watching.** Changes to JSON files are only noticed at start-up, on Refresh or the console command, or by the save
+2. **No file watching.** Changes to JSON files are only noticed at start-up, on Refresh or the console command, or by the save
    guard.
-5. **The tab's values are not live** while you edit the asset (see [2.8](#28-the-json-sync-tab-sjsonsyncpanel)).
-6. **A new pending toast on every Refresh** while anything is pending.
-7. **Inherited changes are not detected.** Editing a parent Blueprint or a C++ default changes a child's values without changing
+3. **The tab's values are not live** while you edit the asset (see [2.8](#28-the-json-sync-tab-sjsonsyncpanel)).
+4. **A new pending toast on every Refresh** while anything is pending.
+5. **Inherited changes are not detected.** Editing a parent Blueprint or a C++ default changes a child's values without changing
    its `.uasset`, so the child's JSON goes out of date silently until the child is saved. Run `-verify` in CI to catch this.
-8. **A changed `.uasset` is loaded at start-up** to compare it, even if only its graph changed. After pulling many assets, start-up
+6. **A changed `.uasset` is loaded at start-up** to compare it, even if only its graph changed. After pulling many assets, start-up
    is slower, once.
-9. **`-import` saves every dirty Blueprint and data asset in memory**, not only those it changed.
-10. **Native (C++) components** are captured and applied with the same code as Blueprint components, but have not been tested on
+7. **`-import` saves every dirty Blueprint and data asset in memory**, not only those it changed.
+8. **Native (C++) components** are captured and applied with the same code as Blueprint components, but have not been tested on
    real assets.
+9. **An undone Two Way apply is applied again after a restart** ([corner cases](#5-corner-cases)): the plugin only remembers undos
+   for the session.

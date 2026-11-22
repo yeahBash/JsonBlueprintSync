@@ -528,6 +528,48 @@ bool FJsonBlueprintSyncTakeKeysTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncChangedAfterReviewTest, "JsonBlueprintSync.ChangedAfterReview", TestFlags)
+bool FJsonBlueprintSyncChangedAfterReviewTest::RunTest(const FString&)
+{
+	// The subsystem's case: the user reviewed file Reviewed, took Speed from it and kept the asset's Tint, then the file changed
+	// again (Updated) before the save. With the reviewed file as the base, the new change is a JSON change and the kept value an
+	// asset change, so the user's decision stands and Two Way may apply the new change.
+	FAssetDefaults Reviewed;
+	Reviewed.Asset = TEXT("/Game/X");
+	Reviewed.Defaults.Add(TEXT("Speed"), TEXT("2"));
+	Reviewed.Defaults.Add(TEXT("Tint"), TEXT("Red"));
+	Reviewed.Defaults.Add(TEXT("Size"), TEXT("1"));
+
+	FAssetDefaults Asset = Reviewed;
+	Asset.Defaults.Add(TEXT("Tint"), TEXT("Blue"));
+
+	FAssetDefaults Updated = Reviewed;
+	Updated.Defaults.Add(TEXT("Size"), TEXT("5"));
+
+	const TArray<FKeyDiff> Diffs = DiffKeys(&Reviewed, Updated, Asset);
+	TestEqual(TEXT("Differing keys"), JoinKeys(Diffs), FString(TEXT("Size,Tint")));
+	const FKeyDiff* Size = FindDiff(Diffs, TEXT("Size"));
+	const FKeyDiff* Tint = FindDiff(Diffs, TEXT("Tint"));
+	TestTrue(TEXT("New file change is a JSON change"), Size && Size->Change == EKeyChange::Json);
+	TestTrue(TEXT("Kept asset value is an asset change"), Tint && Tint->Change == EKeyChange::Asset && !Tint->TakeJsonByDefault());
+	TestTrue(TEXT("Two Way may apply it"), CanAutoApply(true, false, Diffs));
+
+	// The new file also changed the kept key: a conflict, left for the user.
+	FAssetDefaults Clash = Updated;
+	Clash.Defaults.Add(TEXT("Tint"), TEXT("Green"));
+	const TArray<FKeyDiff> ClashDiffs = DiffKeys(&Reviewed, Clash, Asset);
+	const FKeyDiff* TintClash = FindDiff(ClashDiffs, TEXT("Tint"));
+	TestTrue(TEXT("Both changed Tint"), TintClash && TintClash->Change == EKeyChange::Both);
+	TestFalse(TEXT("Two Way leaves a conflict"), CanAutoApply(true, false, ClashDiffs));
+
+	// The new file changed a key the user took from the reviewed file (e.g. a teammate reverted it): a JSON change, ticked.
+	FAssetDefaults Reverted = Reviewed;
+	Reverted.Defaults.Add(TEXT("Speed"), TEXT("1"));
+	const FKeyDiff* Speed = FindDiff(DiffKeys(&Reviewed, Reverted, Asset), TEXT("Speed"));
+	TestTrue(TEXT("Reverted key is a JSON change"), Speed && Speed->Change == EKeyChange::Json);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncCacheTest, "JsonBlueprintSync.Cache", TestFlags)
 bool FJsonBlueprintSyncCacheTest::RunTest(const FString&)
 {
