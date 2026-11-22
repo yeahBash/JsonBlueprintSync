@@ -5,6 +5,7 @@
 #include "JsonBlueprintSyncModule.h"
 #include "JsonBlueprintSyncSettings.h"
 #include "Editor.h"
+#include "Editor/Transactor.h"
 #include "FileHelpers.h"
 #include "Framework/Docking/TabManager.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -473,17 +474,9 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 		}
 		else if (Settings->GetMode(Kind) == EJsonSyncMode::TwoWay)
 		{
-			const FResolved* WasUndone = Undone.Find(PackageName);
-			if (WasUndone && WasUndone->FileHash == FileHash)
-			{
-				// The user undid the apply of this very file: leave it for them.
-				UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s: not applied automatically, its last apply was undone"), *PackageName);
-			}
-			else
-			{
-				Undone.Remove(PackageName);
-				TwoWay.Add(PackageName);
-			}
+			// An undone Apply JSON is still in the undo history (as a redo step, or under the edits made since), so the auto-apply
+			// below leaves such an asset for the user.
+			TwoWay.Add(PackageName);
 		}
 	}
 
@@ -519,6 +512,14 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 		{
 			continue;
 		}
+		if (IsInUndoHistory(PackageName))
+		{
+			// The automatic apply is not undoable, which is safe only if no undo step holds the asset. Rare: at start-up the history is
+			// empty, so this happens only for a Refresh after the asset was edited in this session.
+			UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s: not applied automatically, because the undo history has changes to it; review it in the JSON Sync tab"),
+				*PackageName);
+			continue;
+		}
 		TArray<FString> Keys;
 		for (const FKeyDiff& Diff : View.Keys)
 		{
@@ -531,7 +532,7 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 	}
 	if (Requests.Num() > 0)
 	{
-		ApplyBatch(Requests, true);
+		ApplyBatch(Requests, true, true);
 	}
 
 	ShowPendingNotification();
@@ -680,7 +681,7 @@ bool UJsonBlueprintSyncSubsystem::GetPendingView(const FString& PackageName, FPe
 
 bool UJsonBlueprintSyncSubsystem::ApplyJson(const FString& PackageName, const TArray<FString>& Keys, bool bSave)
 {
-	bool bResolved = ApplyBatch({ { PackageName, Keys } }, !bSave).Contains(PackageName);
+	bool bResolved = ApplyBatch({ { PackageName, Keys } }, !bSave, false).Contains(PackageName);
 	if (bResolved && bSave)
 	{
 		UObject* Asset = LoadAsset(PackageName);
@@ -711,7 +712,36 @@ bool UJsonBlueprintSyncSubsystem::ApplyJson(const FString& PackageName, const TA
 	return bResolved;
 }
 
-TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, bool bNotify)
+bool UJsonBlueprintSyncSubsystem::IsInUndoHistory(const FString& PackageName)
+{
+	const UPackage* Package = FindPackage(nullptr, *PackageName);
+	if (!Package || !GEditor || !GEditor->Trans)
+	{
+		// A package that is not loaded has no objects in any transaction.
+		return false;
+	}
+	// The whole queue: the steps that can be undone and those that can be redone.
+	for (int32 Index = 0; Index < GEditor->Trans->GetQueueLength(); ++Index)
+	{
+		const FTransaction* Transaction = GEditor->Trans->GetTransaction(Index);
+		if (!Transaction)
+		{
+			continue;
+		}
+		TArray<UObject*> Objects;
+		Transaction->GetTransactionObjects(Objects);
+		for (const UObject* Object : Objects)
+		{
+			if (Object && Object->GetPackage() == Package)
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, bool bNotify, bool bAutomatic)
 {
 	struct FItem
 	{
@@ -748,11 +778,17 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 	{
 		// One transaction, so a single Ctrl+Z reverts the whole apply. No compile: compiling replaces the CDO, which would make the
 		// change impossible to undo. Values on the CDO and the templates survive the next compile, as with Details-panel edits.
-		FScopedTransaction Transaction(LOCTEXT("ApplyTransaction", "Apply JSON"));
-		if (GUndo)
+		// An automatic (Two Way) apply has no transaction: the JSON is the source of truth, and Ctrl+Z must not revert a change
+		// that came with it (e.g. from a teammate). Modify() without a transaction only marks the package dirty.
+		TUniquePtr<FScopedTransaction> Transaction;
+		if (!bAutomatic)
 		{
-			// Undoing this transaction makes the assets it changed pending again (see PostUndo).
-			TransactionId = GUndo->GetContext().TransactionId;
+			Transaction = MakeUnique<FScopedTransaction>(LOCTEXT("ApplyTransaction", "Apply JSON"));
+			if (GUndo)
+			{
+				// Undoing this transaction makes the assets it changed pending again (see PostUndo).
+				TransactionId = GUndo->GetContext().TransactionId;
+			}
 		}
 		for (const FItem& Item : Items)
 		{
@@ -779,9 +815,9 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 			}
 			Succeeded.Add(Item.PackageName);
 		}
-		if (Changed.Num() == 0)
+		if (Transaction && Changed.Num() == 0)
 		{
-			Transaction.Cancel();
+			Transaction->Cancel();
 		}
 	}
 	for (const FItem& Item : Items)
@@ -795,7 +831,11 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 
 	if (bNotify && Changed.Num() > 0)
 	{
-		Notify(FText::Format(LOCTEXT("Applied", "Applied JSON to {0}. Not saved; Ctrl+Z reverts."), FText::FromString(JoinShort(Changed))), ENotice::Success);
+		const FText Names = FText::FromString(JoinShort(Changed));
+		Notify(bAutomatic
+			? FText::Format(LOCTEXT("AppliedAutomatically", "Applied JSON to {0} automatically (Two Way). Not saved; Ctrl+Z does not revert it."), Names)
+			: FText::Format(LOCTEXT("Applied", "Applied JSON to {0}. Not saved; Ctrl+Z reverts."), Names),
+			ENotice::Success);
 	}
 	if (Failed.Num() > 0)
 	{

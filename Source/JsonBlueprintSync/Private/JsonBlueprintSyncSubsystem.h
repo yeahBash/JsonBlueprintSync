@@ -19,9 +19,11 @@ struct FAssetData;
  * Keeps the JSON files in sync with the assets while the editor runs (see the plugin README.md):
  * - Saving an asset writes its JSON, unless the JSON has changes that are not reviewed yet (then the asset is "pending").
  * - When the asset registry has finished loading, finds JSON files that changed since the last sync and differ from their asset.
- *   They are listed in the JSON Sync tab. Data assets in Two Way mode get the JSON applied automatically when nothing conflicts.
+ *   They are listed in the JSON Sync tab. Data assets in Two Way mode get the JSON applied automatically when nothing conflicts;
+ *   that apply cannot be undone, and it is skipped for an asset that the undo history holds.
  * - Moves the JSON file when an asset is renamed and deletes it when the asset is deleted.
- * - Undoing an Apply JSON puts the asset back in the JSON Sync tab; a JSON that changes again after it was reviewed is not overwritten.
+ * - Undoing an Apply JSON from the tab puts the asset back in the JSON Sync tab; a JSON that changes again after it was reviewed is
+ *   not overwritten.
  *
  * Not created in commandlets (use -run=JsonBlueprintSync there). Console command JsonBlueprintSync.Sync reruns the check,
  * e.g. after a git pull with the editor open.
@@ -141,8 +143,18 @@ private:
 	/** Whether the JSON file on disk is the one recorded at the last sync, i.e. it has no changes of its own. */
 	bool IsJsonUnchanged(const FString& PackageName) const;
 
-	/** Applies the keys to each asset (Blueprints first, parents before children) in one transaction. Returns the resolved packages. */
-	TArray<FString> ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, bool bNotify);
+	/**
+	 * Applies the keys to each asset (Blueprints first, parents before children). Returns the resolved packages.
+	 * bAutomatic: a Two Way apply, which is not recorded for undo, so that Ctrl+Z cannot revert a JSON change that came from
+	 * elsewhere. Otherwise the whole batch is one transaction. Callers of an automatic apply must check IsInUndoHistory first.
+	 */
+	TArray<FString> ApplyBatch(const TArray<TPair<FString, TArray<FString>>>& Requests, bool bNotify, bool bAutomatic);
+
+	/**
+	 * Whether a transaction in the undo or redo history holds an object of the package. Changing such an asset outside a
+	 * transaction is unsafe: undoing or redoing that transaction would restore the asset's state from before the change.
+	 */
+	static bool IsInUndoHistory(const FString& PackageName);
 
 	/** Clears the pending state after the user (or Two Way) picked the values. TransactionId: the apply's, if it changed the asset. */
 	void Resolve(const FString& PackageName, UObject* Asset, const FGuid& TransactionId);
@@ -196,10 +208,7 @@ private:
 	 */
 	TMap<FString, FResolved> Resolved;
 
-	/**
-	 * Assets whose Apply JSON was undone, so that a redo can resolve them again. A Two Way asset in here is not applied again
-	 * automatically while its file is the one that was undone.
-	 */
+	/** Assets whose Apply JSON was undone, so that a redo can resolve them again. */
 	TMap<FString, FResolved> Undone;
 
 	/** The transaction being undone or redone, from MatchesContext. */

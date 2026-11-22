@@ -62,7 +62,7 @@ Each asset type has a mode, set in **Project Settings > Plugins > JSON Blueprint
 |---|---|---|
 | **None** | Nothing. | Ignored. |
 | **Write JSON Only** | Writes the JSON. | Listed in the JSON Sync tab. Applied only when you choose the values and click **Apply**. |
-| **Two Way** | Writes the JSON. | Applied automatically when the editor starts, unless a key conflicts or the parent differs. Those are listed in the JSON Sync tab. |
+| **Two Way** | Writes the JSON. | Applied automatically when the editor starts, unless a key conflicts or the parent differs. Those are listed in the JSON Sync tab. The automatic apply cannot be undone with Ctrl+Z. |
 
 | Asset type | Default | Two Way allowed |
 |---|---|---|
@@ -72,6 +72,13 @@ Each asset type has a mode, set in **Project Settings > Plugins > JSON Blueprint
 
 For Blueprints the `.uasset` stays the source of truth: the JSON is for reviewing and merging, and changes come back only when
 someone chooses to apply them. Data assets are plain data, so a JSON edit can be trusted to apply on its own.
+
+For Two Way the JSON is the source of truth, so the automatic apply is not an undo step: Ctrl+Z cannot quietly bring back the
+old values and have the next save write them over a teammate's change. To back out a JSON change, edit the values and save (which
+writes the JSON), or revert the JSON file in source control. One exception keeps this safe: if the asset is in the undo history of
+this session (you edited it, or undid an apply), a Refresh or `JsonBlueprintSync.Sync` does not apply it automatically, because
+undoing those steps would bring back the values from before the apply. It is listed in the JSON Sync tab instead, and the log
+says why. At editor start the undo history is empty, so this does not happen there.
 
 ## JSON format
 
@@ -206,7 +213,7 @@ Once every conflict is chosen (the counter below the list shows how many are lef
 - **Apply and Save** does the same and then saves the asset, which writes its JSON. If source control needs the file checked out,
   it asks first. If the save does not happen, a notification says so and the asset is left modified, as after Apply.
 - After either one:
-  - **Ctrl+Z** of the apply (or of a Two Way apply) puts the asset back in the tab if it has not been saved yet, and saving it
+  - **Ctrl+Z** of the apply puts the asset back in the tab if it has not been saved yet, and saving it
     then does not write its JSON, so the JSON change is not lost. **Ctrl+Y** applies it again. After Apply and Save, Ctrl+Z is
     an ordinary edit: the asset is modified, and saving it writes its values to the JSON.
   - If the JSON file changes again before you save (e.g. a `git pull`), the save does not write the JSON. The asset is listed

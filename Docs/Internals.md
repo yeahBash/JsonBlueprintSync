@@ -71,7 +71,8 @@ Terms used below:
   saving it does not write its JSON.
 - **Resolved**: the user applied or overwrote the JSON in this session, but the asset has not been saved since. The plugin
   remembers which file the user reviewed, so a file that changes again before the save is not overwritten.
-- **Undone**: an apply that was undone with Ctrl+Z. The asset is pending again, as before the apply.
+- **Undone**: an apply from the JSON Sync tab that was undone with Ctrl+Z. The asset is pending again, as before the apply.
+  (An automatic Two Way apply has no undo step, so it never becomes undone.)
 - **Synced kind**: the asset is a Blueprint, Widget Blueprint or data asset, and the mode for that kind is not None.
 
 ## 2. Files
@@ -474,7 +475,7 @@ and the subsystem never run together.
 | `Cache` | disk (`Saved/`) | `FSyncCache`: JSON hash, saved hash and pending flag per package, plus base files |
 | `Pending` | memory | package → `FPending { Kind, File (parsed doc, unset if broken), Error, Base (unset if unknown), FileHash (of the file compared) }`. Mirrors the cache's pending entries once a sync has run. |
 | `Resolved` | memory, this session only | package → `FResolved { Kind, FileHash, ReviewedFile, Before, TransactionId }` for assets applied or overwritten but not saved since. `FileHash` and `ReviewedFile` are the file the user reviewed; `Before` is the pending state before the apply (unset for Overwrite JSON); `TransactionId` is the apply transaction, if it changed the asset. |
-| `Undone` | memory, this session only | the same records for applies that were undone, so that a redo can resolve them again and Two Way does not re-apply the same file |
+| `Undone` | memory, this session only | the same records for applies that were undone, so that a redo can resolve them again |
 | `UndoRedoTransactionId` | memory | the transaction being undone or redone, set by `MatchesContext` just before `PostUndo` / `PostRedo` |
 | `PendingRemovals` | memory | packages reported as removed, checked on the next tick |
 | `PendingNotification` | memory | the "N asset(s) differ" toast, so it can be replaced |
@@ -515,8 +516,7 @@ This runs at start-up, on `JsonBlueprintSync.Sync` and on the tab's Refresh butt
    7. A resolved asset whose file changed after the review becomes pending with the reviewed file as the base
       (`MarkChangedAfterReview`, see [OnPackageSaved](#onpackagesaved-write-on-save-and-the-save-guard)). Any other asset goes to
       `Detect` with the asset-changed flag.
-   8. If the asset became or stayed pending and its mode is Two Way, remember it for auto-apply, unless it is in `Undone` with the
-      same file hash: the user undid the apply of this very file. A file that changed since is applied as usual.
+   8. If the asset became or stayed pending and its mode is Two Way, remember it for auto-apply.
 3. Pending assets whose JSON file no longer exists are dropped: there is nothing left to review.
 4. Save the cache, log a summary, and show one error toast if any file could not be checked: unreadable, no asset, or (from
    `Detect`) the asset cannot be loaded. Each is logged as an error. Nothing is recorded for them, so the next sync tries again.
@@ -525,10 +525,18 @@ This runs at start-up, on `JsonBlueprintSync.Sync` and on the tab's Refresh butt
    - there is a base;
    - the parents agree;
    - no key is `Both`;
-   - at least one key is `Json` (a JSON that is only out of date stays listed).
+   - at least one key is `Json` (a JSON that is only out of date stays listed);
+   - `IsInUndoHistory` is false: no transaction in `GEditor->Trans` (the whole queue, so undo and redo steps) holds an object of
+     the asset's package. Otherwise the asset stays listed, with a log line.
 
    The keys applied are the `Json` keys; `Asset` keys keep the asset's value. All such assets are applied in one batch
-   (`ApplyBatch`), as one undo step.
+   (`ApplyBatch` with `bAutomatic`), with **no transaction**: the JSON is the source of truth, so Ctrl+Z must not bring back the
+   old values and let the next save write them over the JSON. The undo-history check is what makes that safe. Changing an object
+   outside a transaction while an older transaction holds it would break undo: undoing or redoing that transaction restores the
+   object's state from before the apply, so the applied values would be lost and the next save would write the old ones. At editor
+   start the history is empty, so the check matters only for a Refresh or `JsonBlueprintSync.Sync` later in the session. An asset
+   whose tab apply was undone is caught by it too (the apply is a redo step, or sits under the edits made since), so there is no
+   separate check for `Undone`.
 6. Show the pending toast (Review / Later) if anything is pending, and broadcast `OnPendingChanged`, which refreshes the tab.
 
 #### Detect: one changed file
@@ -586,17 +594,18 @@ request, then `OnPendingChanged`. With `bSave`:
 - If the asset is not dirty (every key used the asset, and it had no unsaved edits), `Resolve` has already written the JSON, so
   nothing is saved. Toast: "Wrote the JSON of …; the asset did not change."
 
-`ApplyBatch(Requests)`:
+`ApplyBatch(Requests, bNotify, bAutomatic)`:
 
 1. For each request, load the asset and build `TakeKeys(Capture(asset), File, Keys)`. A package that is not pending, has a broken
    file, or cannot be loaded fails.
 2. Sort by `GetApplyOrder` (stable): parents first, data assets last.
-3. Inside one `FScopedTransaction("Apply JSON")`, call `Apply` for each. Warnings and errors go to the log. A failed asset is skipped,
+3. Inside one `FScopedTransaction("Apply JSON")` (none if `bAutomatic`), call `Apply` for each. Warnings and errors go to the log. A failed asset is skipped,
    stays pending, and the others go on. Changed assets are `MarkModified`. **Nothing is compiled and nothing is saved.** If nothing
    changed, the transaction is cancelled, so no empty undo step is left. The transaction's id (`GUndo->GetContext().TransactionId`)
-   is kept for the assets it changed.
+   is kept for the assets it changed. Without a transaction, `Modify` only marks the package dirty and the id stays invalid.
 4. `Resolve` each asset that succeeded, with the transaction id if the apply changed it, then save the cache.
-5. Toasts: "Applied JSON to … Not saved; Ctrl+Z reverts." and/or "Cannot apply the JSON of …".
+5. Toasts: "Applied JSON to … Not saved; Ctrl+Z reverts." (automatic: "Applied JSON to … automatically (Two Way). Not saved;
+   Ctrl+Z does not revert it.") and/or "Cannot apply the JSON of …".
 
 `Resolve(Package, Asset, TransactionId)`:
 
@@ -623,8 +632,9 @@ Undoing an unrelated transaction does nothing, even if it touches a resolved ass
 `PostRedo`: every `Undone` record with the redone transaction is resolved again, if the asset is still pending with the same file
 hash. Records for that transaction are dropped either way. This is only logged.
 
-A Two Way asset in `Undone` is not auto-applied again while its file is the one that was undone. `Undone` is not saved, so the next
-editor start applies it again.
+An automatic Two Way apply resolves with an invalid transaction id, so no undo matches it. A Two Way asset in `Undone` is still in
+the undo history, so a Refresh does not apply it automatically. `Undone` is not saved, but the next editor start has an empty
+history and applies the file as usual.
 
 #### OverwriteJson
 
@@ -965,10 +975,14 @@ is never skipped by the hash check.
   The asset is modified with its old values, and saving it writes them to the JSON. Nothing is lost silently: both files are on
   disk and the change shows in git.
 - *Apply and Save, checkout declined*: nothing is saved. The asset stays modified and resolved, as after Apply.
-- *Ctrl+Z after Apply or a Two Way auto-apply*: the values go back and the asset is pending again, with the base it had
-  before, and a warning toast. Saving it does not write the JSON. Ctrl+Y resolves it again.
-- *Ctrl+Z of a Two Way auto-apply, then a restart*: `Undone` is not kept, so the next start applies the file again. Choose All
-  from Asset and Apply in the tab to keep the asset's values.
+- *Ctrl+Z after Apply*: the values go back and the asset is pending again, with the base it had before, and a warning toast.
+  Saving it does not write the JSON. Ctrl+Y resolves it again.
+- *Ctrl+Z after a Two Way auto-apply*: nothing to undo; the apply is not in the history. Ctrl+Z undoes whatever came before it,
+  which is nothing at start-up. To keep the asset's old values, edit them back and save, or revert the JSON in git.
+- *Two Way asset edited this session, then a teammate's JSON arrives and you Refresh*: not applied automatically, because the edit
+  is in the undo history. It stays listed and you apply it in the tab, which is undoable. The next editor start would apply it
+  automatically.
+- *Ctrl+Z of a tab Apply on a Two Way asset, then Refresh*: the apply is a redo step, so the asset stays listed.
 - *Ctrl+Z after Apply, then edits, then Ctrl+Y*: Unreal drops the redo history when you edit, so there is nothing to redo. The
   asset stays pending.
 - *Ctrl+Z of a later edit (not the apply)*: nothing changes in the sync state. The asset stays resolved.
@@ -1040,5 +1054,5 @@ where noted.
 7. **`-import` saves every dirty Blueprint and data asset in memory**, not only those it changed.
 8. **Native (C++) components** are captured and applied with the same code as Blueprint components, but have not been tested on
    real assets.
-9. **An undone Two Way apply is applied again after a restart** ([corner cases](#5-corner-cases)): the plugin only remembers undos
-   for the session.
+9. **An automatic Two Way apply cannot be undone** ([corner cases](#5-corner-cases)), by design. To back out a bad JSON, edit the
+   values and save, or revert the JSON in git.

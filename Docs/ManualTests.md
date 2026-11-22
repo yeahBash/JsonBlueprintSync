@@ -421,7 +421,7 @@ rejects such a file and `-verify` reports it.
 Expected:
 
 - No asset is listed.
-- The toast "Applied JSON to DA_SyncItem. Not saved; Ctrl+Z reverts." appears.
+- The toast "Applied JSON to DA_SyncItem automatically (Two Way). Not saved; Ctrl+Z does not revert it." appears.
 - `DA_SyncItem` is dirty and shows Damage 20.
 
 2. Save it.
@@ -454,24 +454,39 @@ Expected: applied automatically, as in 5.1.
 Expected: `PDA_SyncItem` is listed (Blueprints are not Two Way). After **Apply**, `DA_SyncItem` follows if it does not override
 `Damage`, and keeps its own value if it does.
 
-**5.6 Undo of an automatic apply**
+**5.6 Ctrl+Z does not revert an automatic apply**
 
 1. Close the editor. In `DA_SyncItem.json`, set `"Damage": "21.0"`. Start the editor; it is applied as in 5.1.
 2. Press Ctrl+Z.
 
-Expected: Damage goes back, the undo warning toast appears, and `DA_SyncItem` is listed with `Damage` Changed in JSON.
+Expected: nothing is undone (Edit > Undo History is empty). Damage stays 21, no undo toast, and `DA_SyncItem` is not listed.
 
-3. Press **Refresh**.
+3. Set Damage back to its old value in the asset and save.
 
-Expected: it is **not** applied again (the log says its last apply was undone). It stays listed.
+Expected: the JSON has the old value again. This is the way to back out a JSON change (or revert the JSON in git).
 
-4. Change `Damage` in the JSON to `"22.0"` and press **Refresh**.
+**5.7 Not applied automatically when the asset is in the undo history**
 
-Expected: applied automatically (a new file).
+1. Open `DA_SyncItem`, change `Label`, and save. Change `Damage` in the JSON and press **Refresh**.
 
-5. Press Ctrl+Z, close the editor, choose **Don't Save**, and start it again.
+Expected: it is **not** applied. The log says "not applied automatically, because the undo history has changes to it". The asset
+is listed with `Damage` Changed in JSON.
 
-Expected: applied automatically again: undos are only remembered for the session.
+2. Click **Apply**.
+
+Expected: the toast "Applied JSON to DA_SyncItem. Not saved; Ctrl+Z reverts." Damage has the JSON value.
+
+3. Press Ctrl+Z.
+
+Expected: Damage goes back, the undo warning toast appears, and the asset is listed again.
+
+4. Press **Refresh**.
+
+Expected: still not applied (the apply is a redo step), with the same log line.
+
+5. Close the editor, choose **Don't Save**, and start it again.
+
+Expected: applied automatically, as in 5.1: the undo history starts empty.
 
 ## 6. No base
 
