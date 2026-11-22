@@ -247,8 +247,30 @@ There is no base, so every differing key shows as **Conflict**, when:
 - the plugin has never synced the asset before, or
 - the asset was saved while its JSON had unreviewed changes (unless you had just applied it: see Apply above).
 
-A Blueprint is also changed by edits to its parent Blueprint or its C++ class, without its own `.uasset` changing. Such a change is
-not detected until the Blueprint is saved; `-verify` catches it.
+**Changes to a parent.** A JSON file lists only what its asset overrides, so editing a parent Blueprint (or the C++ class)
+normally leaves the children's JSON correct. The values a child does not set follow the parent and are not in the child's file;
+the values it sets are kept. This holds at every depth (children, grandchildren, data assets of the class). Saving the parent
+writes only the parent's JSON.
+
+For most values, Unreal copies the parent's new value into the children in memory without marking them as unsaved. A component's
+transform (location, rotation, scale) and some collision settings are the exception: Unreal then marks each child whose copy of
+the component had the parent's old value as unsaved, and the levels with placed instances too, so that one Ctrl+Z reverts them all.
+Saving those children is harmless: it rewrites their JSON, normally unchanged, since a value equal to the parent's is not an
+override.
+
+A child's JSON goes out of date without its `.uasset` changing only when:
+
+- the parent now has the value the child overrides. The key is no longer an override, but the child's file lists it until the
+  child is saved. Applying it changes nothing.
+- the parent removes or renames a variable or component that the child overrides. The child's file names a key that no longer
+  exists, so applying it reports an error and applies nothing in that file.
+- the child changed one field of a struct that Unreal saves field by field (a User Defined Structure, or most C++ structs), and the
+  parent then changes another field. The child loads the parent's new value for that field, but its file holds the whole struct,
+  with the old one. Engine structs such as colours, vectors, rotators and transforms are saved whole, so for them the child keeps
+  the old value on disk and in its file; only the open editor shows the parent's new value until a restart. See
+  [manual test 7.3](Docs/ManualTests.md#7-propagation-and-inherited-components).
+
+Nothing detects these, because the child's `.uasset` does not change. Saving the child fixes its file; `-verify` reports them.
 
 ### Local state
 

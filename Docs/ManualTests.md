@@ -549,6 +549,65 @@ Expected: in the child's Components panel, `Light` has Intensity 123. The parent
 
 Expected: the child's Light goes back to the parent's Intensity.
 
+**7.3 Parent changes part of a struct the child overrides**
+
+This checks the struct case of README "Changes to a parent". The expectations come from reading the engine code; record what
+happens, and if it differs, update that section and this test.
+
+1. In `BP_SyncLamp` Class Defaults, set `Tint` = R 0.5, G 0.5, B 0.5, A 1. Compile and save.
+2. In `BP_SyncLampChild` Class Defaults, expand `Tint` and change only R to 1. Compile and save.
+
+Expected: `BP_SyncLampChild.json` has the whole struct in `self.Tint`, with `R=1.000000` and `G=0.500000`.
+
+3. In `BP_SyncLamp`, change only `Tint` G to 0.2. Compile and save. Do not touch the child.
+
+Expected:
+
+- `BP_SyncLamp.json` has `G=0.200000`. `BP_SyncLampChild.json` is unchanged (`G=0.500000`).
+- The child's Class Defaults show G = 0.2 (the Details panel copies the edited field into it), but the child is not dirty.
+
+4. Close the editor without saving the child, and run the commandlet with `-verify -dir=/Game/Developers/<you>/JsonSyncTest`.
+   Then start the editor.
+
+Expected: a Linear Color is saved whole, so the child's `.uasset` still has G = 0.5, as its JSON does. `-verify` passes, and after
+the restart the child shows G = 0.5 again.
+
+5. Create a **Structure** (Blueprint > Structure) `S_SyncPair` with two Float members, `A` and `B`. Add a variable `Pair` of type
+   `S_SyncPair` to `BP_SyncLamp`, set A = 1 and B = 1, compile and save. In `BP_SyncLampChild`, change only `Pair` A to 5, compile
+   and save.
+
+Expected: `BP_SyncLampChild.json` has the whole struct in `self.Pair` (member names carry a GUID suffix), with A 5 and B 1.
+
+6. In `BP_SyncLamp`, change only `Pair` B to 7. Compile and save. Close the editor without saving the child, and run `-verify`.
+
+Expected: a User Defined Structure is saved field by field, so a fresh load gives the child B = 7 while its JSON says B = 1.
+`-verify` reports `BP_SyncLampChild`.
+
+7. Start the editor and save the child.
+
+Expected: `BP_SyncLampChild.json` has B 7, and `-verify` passes again.
+
+8. Clean up: remove the `Pair` variable from `BP_SyncLamp`, compile and save it and the child, and delete `S_SyncPair`.
+
+**7.4 Parent component transform marks children unsaved**
+
+1. Keep `L_SyncTest` from 7.1 open. In `BP_SyncLamp`, change `FlickerSpeed` to any other value. Compile and save.
+
+Expected: `BP_SyncLampChild` and the level do not become dirty, although A and C take the new value.
+
+2. In `BP_SyncLamp`, select `Light` and change its Location Z to 50. Compile and save.
+
+Expected:
+
+- `BP_SyncLamp.json` has the new `RelativeLocation` in `components.Light`.
+- `BP_SyncLampChild` becomes dirty: it has an override of `Light` since 2.4, and that copy had the old location. The level
+  becomes dirty too, and the placed lamps' lights move.
+- Before saving, one Ctrl+Z reverts the parent, the child and the level.
+
+3. Save the child.
+
+Expected: `BP_SyncLampChild.json` does not change: its location equals the parent's, so it is not an override.
+
 ## 8. Widget Blueprints
 
 **8.1 Write**

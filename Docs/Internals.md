@@ -979,7 +979,24 @@ is never skipped by the hash check.
 - *`.uasset` changed, JSON not* (committed alone, or edited with the plugin's mode None): detected at start-up through the saved
   hash. Listed as "JSON out of date" if the values differ, recorded silently if they do not.
 - *Change inherited from a parent Blueprint or the C++ class*: the child's `.uasset` does not change, so nothing is detected. The
-  child's JSON is out of date until the child is saved. `-verify` catches it.
+  child's document holds only its overrides, so it stays correct, except when:
+  - the parent now equals a child override: the key is still listed but is no longer an override (applying it changes nothing);
+  - the parent removed or renamed an overridden property or component: the key is unknown, and applying the file fails;
+  - the child overrides one field of a struct that is serialized field by field (User Defined Structures, C++ structs without
+    `immutable`/`atomic`), and the parent changed another field: a fresh load gives the child the parent's new value for that
+    field, but the document holds the whole struct with the old one. Atomic structs (`FLinearColor`, `FVector`, `FRotator`,
+    `FTransform`, ...) are saved whole, so the `.uasset` and the document agree; only the open editor differs until a restart,
+    because the Details panel propagates the edited field (`FPropertyNode::PropagatePropertyChange`). Arrays are compared and
+    saved whole, so they are not affected. See manual test 7.3.
+
+  These last until the child is saved. `-verify` catches them.
+
+  Unreal's own propagation decides whether the children become dirty. The Details panel's generic path
+  (`FPropertyNode::PropagatePropertyChange`) writes the instances without `Modify`, so they stay clean, and compiling the parent
+  restores the children's dirty flag (`FBlueprintCompilationManager`). Component transforms and some collision settings go through
+  `FComponentEditorUtils::ApplyDefaultValueChange`, which calls `Modify` on each instance still at the old value and on its owner,
+  so the children with an override template of that component, and levels with placed instances, become dirty. Saving them
+  writes their JSON through the normal save path, normally unchanged.
 - *Cache from an older plugin version* (no `asset` field): the first start adopts the current saved hash for entries whose JSON
   matches. A `.uasset` that changed before that first start is not noticed.
 - *Loaded, dirty package at Refresh*: the saved hash is taken from the package in memory, not from the file. A `.uasset` replaced on
@@ -1069,8 +1086,10 @@ where noted.
    guard.
 3. **The tab's values are not live** while you edit the asset (see [2.8](#28-the-json-sync-tab-sjsonsyncpanel)).
 4. **A new pending toast on every Refresh** while anything is pending.
-5. **Inherited changes are not detected.** Editing a parent Blueprint or a C++ default changes a child's values without changing
-   its `.uasset`, so the child's JSON goes out of date silently until the child is saved. Run `-verify` in CI to catch this.
+5. **Some inherited changes leave a child's JSON out of date.** Editing a parent Blueprint or a C++ default does not change a
+   child's `.uasset`. The child's JSON lists only its overrides, so it usually stays correct. The exceptions (the parent now matches
+   a child override, an overridden property or component was removed or renamed, a field-by-field struct the child changed in
+   part) go unnoticed until the child is saved. Run `-verify` in CI to catch them.
 6. **A changed `.uasset` is loaded at start-up** to compare it, even if only its graph changed. After pulling many assets, start-up
    is slower, once.
 7. **`-import` saves every dirty Blueprint and data asset in memory**, not only those it changed.
