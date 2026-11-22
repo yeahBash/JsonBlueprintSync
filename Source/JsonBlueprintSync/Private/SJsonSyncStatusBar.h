@@ -4,7 +4,7 @@
 #include "Widgets/SCompoundWidget.h"
 
 /**
- * The JSON Sync entry in the editor's status bar, next to the unsaved assets: "JSON Synced", or how many assets have JSON changes
+ * The JSON Sync entry in the editor's status bar, just left of the unsaved assets: "All JSON Synced", or how many assets have JSON changes
  * to review. The tooltip lists them; clicking opens the JSON Sync tab.
  */
 class SJsonSyncStatusBar : public SCompoundWidget

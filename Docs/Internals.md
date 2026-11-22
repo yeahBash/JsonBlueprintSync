@@ -135,10 +135,11 @@ Dependencies and why each is needed:
 and when Slate is not initialized (e.g. `-nullrhi` runs), so headless runs do not touch the UI. `ShutdownModule` unregisters it.
 
 It also adds `SJsonSyncStatusBar` to the level editor's status bar, through `UToolMenus::RegisterStartupCallback` and
-`ExtendMenu("LevelEditor.StatusBar.ToolBar")`, in its own section just before the `SourceControl` section (which holds the
-unsaved assets and revision control entries). The menu owner is the module, so `ShutdownModule` removes it with
+`ExtendMenu("LevelEditor.StatusBar.ToolBar")`, as the first entry of the `SourceControl` section, whose one widget starts with the unsaved
+assets entry. (A section of its own placed before `SourceControl` could land left of the Compile button, which the level editor also
+places there.) The menu owner is the module, so `ShutdownModule` removes it with
 `UToolMenus::UnregisterOwner`. The widget is a flat button styled like the unsaved assets entry: the `Icons.Merge` icon and
-"JSON Synced" or "N JSON to Review", in the warning colour while anything is pending. It polls the subsystem's
+"All JSON Synced" or "N JSON to Review", in the warning colour while anything is pending. It polls the subsystem's
 `GetPendingNum()` (the size of `Pending`) on each paint, so it needs no delegate. The tooltip lists up to ten pending assets, built
 only when shown. A click calls `OpenSyncTab`. Asset editors have their own status bars; the entry is only in the level editor's.
 

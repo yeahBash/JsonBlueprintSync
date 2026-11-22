@@ -69,9 +69,13 @@ void SJsonSyncStatusBar::Register(void* Owner)
 	{
 		return;
 	}
-	// Just left of the unsaved assets and revision control entries.
-	FToolMenuSection& Section = Menu->AddSection("JsonBlueprintSync", FText::GetEmpty(), FToolMenuInsert("SourceControl", EToolMenuInsertType::Before));
-	Section.AddEntry(FToolMenuEntry::InitWidget("JsonSyncStatusBar", SNew(SJsonSyncStatusBar), FText::GetEmpty(), true, false));
+	// Directly left of the unsaved assets entry: first in the engine's "SourceControl" section, whose one widget starts with the
+	// unsaved assets. A section of our own placed before "SourceControl" could end up left of the Compile button, which the level
+	// editor also places before "SourceControl".
+	FToolMenuSection& Section = Menu->FindOrAddSection("SourceControl");
+	FToolMenuEntry Entry = FToolMenuEntry::InitWidget("JsonSyncStatusBar", SNew(SJsonSyncStatusBar), FText::GetEmpty(), true, false);
+	Entry.InsertPosition = FToolMenuInsert(NAME_None, EToolMenuInsertType::First);
+	Section.AddEntry(Entry);
 }
 
 int32 SJsonSyncStatusBar::GetPendingNum()
@@ -84,7 +88,7 @@ FText SJsonSyncStatusBar::GetText() const
 {
 	const int32 Num = GetPendingNum();
 	return Num == 0
-		? LOCTEXT("StatusSynced", "JSON Synced")
+		? LOCTEXT("StatusSynced", "All JSON Synced")
 		: FText::Format(LOCTEXT("StatusPending", "{0} JSON to Review"), FText::AsNumber(Num));
 }
 

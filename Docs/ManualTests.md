@@ -383,7 +383,7 @@ Expected: the warning toast "Applied the JSON to BP_SyncLamp, but it was not sav
 
 1. With nothing listed, look at the status bar at the bottom of the level editor.
 
-Expected: left of the unsaved assets entry, "JSON Synced" with the merge icon. The tooltip says no asset has JSON changes.
+Expected: directly left of the unsaved assets entry (right of the Compile button), "All JSON Synced" with the merge icon. The tooltip says no asset has JSON changes.
 
 2. Change `FlickerSpeed` in `BP_SyncLamp.json` and press **Refresh** (or run `JsonBlueprintSync.Sync`).
 
@@ -391,7 +391,7 @@ Expected: the entry turns yellow and reads "1 JSON to Review". Its tooltip lists
 
 3. Close the JSON Sync tab and click the entry.
 
-Expected: the tab opens. After **Apply** (or Overwrite JSON) the entry reads "JSON Synced" again.
+Expected: the tab opens. After **Apply** (or Overwrite JSON) the entry reads "All JSON Synced" again.
 
 ## 4. Bad files
 

@@ -180,7 +180,7 @@ Problems are shown as notifications, not only in the Output Log (category `LogJs
 ### The JSON Sync tab
 
 Open it from **Window > JSON Sync**, with **Review** on a notification, or by clicking the JSON Sync entry in the status bar at the
-bottom of the editor, next to the unsaved assets. That entry reads **JSON Synced**, or **N JSON to Review** (in yellow) while
+bottom of the editor, just left of the unsaved assets. That entry reads **All JSON Synced**, or **N JSON to Review** (in yellow) while
 assets are listed; its tooltip names them. The top list shows the assets whose JSON differs, with a
 status:
 
