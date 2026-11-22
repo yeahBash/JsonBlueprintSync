@@ -10,7 +10,7 @@ to the project:
 `.uasset` files are binary, so this gives you diffs, code review and merges for default values. Only values that differ from the
 archetype are stored (the parent class for a Blueprint, the class for a data asset), so a file holds just what the asset itself sets.
 
-Graph logic (nodes and pins) is out of scope. Every file says `"scope": "defaults"` to make that clear.
+Graph logic (nodes and pins) is out of scope.
 
 ## Requirements
 
@@ -81,12 +81,13 @@ One file per asset under `/Game`, at `<JsonDir>/<package path>.json`. For exampl
 ```json
 {
   "schema": 2,
-  "scope": "defaults",
   "asset": "/Game/Features/Light/BP_Lamp",
   "parent": "/Script/Engine.Actor",
-  "defaults": { "bStartOn": "True", "FlickerSpeed": "2.5" },
-  "components": {
-    "PointLight": { "Intensity": "5000.0", "LightColor": "(R=255,G=200,B=150,A=255)" }
+  "overrides": {
+    "self": { "bStartOn": "True", "FlickerSpeed": "2.5" },
+    "components": {
+      "PointLight": { "Intensity": "5000.0", "LightColor": "(R=255,G=200,B=150,A=255)" }
+    }
   }
 }
 ```
@@ -94,10 +95,12 @@ One file per asset under `/Game`, at `<JsonDir>/<package path>.json`. For exampl
 - **Values are Unreal property text**: the same format as copy/paste in the Details panel, stored as JSON strings. Structs,
   enums, object references and soft paths round-trip exactly. A value that does not parse is reported as an error and nothing in
   that file is applied.
-- **`defaults`** holds the Blueprint's class default object, or a data asset's own properties.
-- **`components`** (Blueprints) holds component templates, keyed by component name. This covers components added in this
-  Blueprint, inherited from a parent Blueprint, or created in C++.
-- **`widgets`** (Widget Blueprints, see below) holds the Designer's widgets.
+- **`overrides`** holds every value the asset sets, i.e. every value that differs from its archetype:
+  - **`self`**: the Blueprint's class default object, or a data asset's own properties.
+  - **`components`** (Blueprints): component templates, keyed by component name. This covers components added in this
+    Blueprint, inherited from a parent Blueprint, or created in C++.
+  - **`widgets`** (Widget Blueprints, see below): the Designer's widgets.
+  - A missing `overrides`, `self`, `components` or `widgets` means that nothing in it is overridden.
 - **The file is complete: a missing key means the archetype's value.** Deleting a line and applying the file resets that property
   to the parent's (or the class's) value.
 - **Arrays and structs are replaced whole.**
@@ -107,29 +110,29 @@ One file per asset under `/Game`, at `<JsonDir>/<package path>.json`. For exampl
   warning.
 - Output is deterministic: sorted keys, two-space indent, LF line endings, trailing newline, no timestamps. Applying a file and
   writing it again gives the same bytes.
-- Files from version 1 of the format (`"schema": 1`, with a `reset` list) are not read. Re-export them: save the asset, or run the
-  commandlet with `-export`.
+- Files from version 1 of the format (`"schema": 1`, with a `reset` list), and files with the older `defaults` and `scope` fields
+  instead of `overrides`, are not read. Re-export them: save the asset, or run the commandlet with `-export`.
 
 Applying a value also updates child Blueprints, data assets of a Blueprint class, and placed instances that inherited the old value,
 the same way the Details panel does. Instances that override the value keep their override.
 
 ### Widget Blueprints
 
-For a Widget Blueprint, the values set in the Designer are stored in a `widgets` section, keyed by widget name. Each widget is
+For a Widget Blueprint, the values set in the Designer are stored in `overrides.widgets`, keyed by widget name. Each widget is
 diffed against the defaults of its widget class. The layout of a widget in its parent panel (anchors, offsets, padding, alignment,
 Z order and so on) is its slot, stored under `"<Widget>.Slot"`:
 
 ```json
-  "widgets": {
-    "Title": { "RenderOpacity": "0.500000", "Text": "NSLOCTEXT(\"...\", \"...\", \"Hello\")" },
-    "Title.Slot": { "ZOrder": "3" }
-  },
+    "widgets": {
+      "Title": { "RenderOpacity": "0.500000", "Text": "NSLOCTEXT(\"...\", \"...\", \"Hello\")" },
+      "Title.Slot": { "ZOrder": "3" }
+    }
 ```
 
 - Keys in the JSON Sync tab are `Title.RenderOpacity` for a widget and `Title.Slot.ZOrder` for its slot.
 - Text values keep their localization key, in Unreal's text format.
 - The section is written only when a Blueprint has widgets with values set, so other Blueprints' files do not have it.
-- Values set on the Widget Blueprint's own class defaults (Class Defaults in the graph editor) still go in `defaults`.
+- Values set on the Widget Blueprint's own class defaults (Class Defaults in the graph editor) still go in `self`.
 - Only existing widgets are updated. Adding, removing, renaming or re-parenting widgets is not synced: a file that names a widget
   the Blueprint does not have is an error, and nothing in it is applied.
 

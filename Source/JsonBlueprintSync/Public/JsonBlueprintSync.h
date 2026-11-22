@@ -37,8 +37,8 @@ namespace JsonBlueprintSync
 		/** Blueprints: path of the parent class, e.g. /Script/Engine.Actor. Data assets: path of the asset's class. */
 		FString Parent;
 
-		/** Property name -> value text: the class default object for a Blueprint, the asset itself for a data asset. */
-		TMap<FString, FString> Defaults;
+		/** "overrides.self": property name -> value text, for the class default object of a Blueprint or the data asset itself. */
+		TMap<FString, FString> Self;
 
 		/** Component name -> property name -> value text, for component templates. */
 		TMap<FString, TMap<FString, FString>> Components;

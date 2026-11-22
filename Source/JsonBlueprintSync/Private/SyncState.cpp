@@ -119,13 +119,13 @@ FAssetDefaults TakeKeys(const FAssetDefaults& Current, const FAssetDefaults& Sou
 		FString Object, Property;
 		if (!Key.Split(TEXT("."), &Object, &Property, ESearchCase::CaseSensitive, ESearchDir::FromEnd))
 		{
-			if (const FString* Value = Source.Defaults.Find(Key))
+			if (const FString* Value = Source.Self.Find(Key))
 			{
-				Result.Defaults.Add(Key, *Value);
+				Result.Self.Add(Key, *Value);
 			}
 			else
 			{
-				Result.Defaults.Remove(Key);
+				Result.Self.Remove(Key);
 			}
 			continue;
 		}

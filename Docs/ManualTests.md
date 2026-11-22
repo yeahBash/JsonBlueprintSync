@@ -87,16 +87,17 @@ Expected `.../BP_SyncLamp.json`:
 ```json
 {
   "schema": 2,
-  "scope": "defaults",
   "asset": "/Game/Developers/<you>/JsonSyncTest/BP_SyncLamp",
   "parent": "/Script/Engine.Actor",
-  "defaults": {
-    "FlickerSpeed": "2.500000",
-    "bStartOn": "True"
-  },
-  "components": {
-    "Light": {
-      "Intensity": "8000.000000"
+  "overrides": {
+    "self": {
+      "FlickerSpeed": "2.500000",
+      "bStartOn": "True"
+    },
+    "components": {
+      "Light": {
+        "Intensity": "8000.000000"
+      }
     }
   }
 }
@@ -117,13 +118,13 @@ Expected: the file's modified time does not change, and `git status` shows nothi
 
 1. In `BP_SyncLamp` Class Defaults, click the reset arrow next to `bStartOn`. Compile and save.
 
-Expected: `bStartOn` is gone from `defaults`.
+Expected: `bStartOn` is gone from `self`.
 
 **2.4 Child Blueprint stores only its own changes**
 
 1. In `BP_SyncLampChild`, set `FlickerSpeed` = 3. Select the inherited `Light` and set Attenuation Radius = 500. Compile and save.
 
-Expected `.../BP_SyncLampChild.json`: `parent` is `/Game/.../BP_SyncLamp.BP_SyncLamp_C`, `defaults` has only `FlickerSpeed`, and
+Expected `.../BP_SyncLampChild.json`: `parent` is `/Game/.../BP_SyncLamp.BP_SyncLamp_C`, `self` has only `FlickerSpeed`, and
 `components.Light` has only `AttenuationRadius`, not the parent's Intensity.
 
 **2.5 Data assets**
@@ -133,16 +134,16 @@ Expected `.../BP_SyncLampChild.json`: `parent` is `/Game/.../BP_SyncLamp.BP_Sync
 
 Expected:
 
-- `DA_SyncItem.json`: `parent` is `/Game/.../PDA_SyncItem.PDA_SyncItem_C`, with `defaults` `Damage` and `Label`. There is no
+- `DA_SyncItem.json`: `parent` is `/Game/.../PDA_SyncItem.PDA_SyncItem_C`, with `Damage` and `Label` in `self`. There is no
   `components` section.
-- `PDA_SyncItem.json` is a normal Blueprint file with `Secret` in `defaults`.
+- `PDA_SyncItem.json` is a normal Blueprint file with `Secret` in `self`.
 - `Secret` never appears in `DA_SyncItem.json`, because it is not editable on the asset.
 
 **2.6 Native data asset**
 
 1. In `IA_SyncTest`, set Value Type = Axis1D (float) and tick Consume Input off, or change any other property. Save.
 
-Expected: `IA_SyncTest.json` with `parent` `/Script/EnhancedInput.InputAction` and the changed values in `defaults`.
+Expected: `IA_SyncTest.json` with `parent` `/Script/EnhancedInput.InputAction` and the changed values in `self`.
 
 ## 3. JSON changes on a Blueprint (Write JSON Only)
 
@@ -292,7 +293,7 @@ file in canonical form.
 
 **3.13 Unknown key, kept from the asset**
 
-1. Add `"Nope": "1"` to `defaults` in the JSON. Refresh.
+1. Add `"Nope": "1"` to `overrides.self` in the JSON. Refresh.
 
 Expected: `Nope` is listed (JSON `1`, Asset `(default)`).
 
@@ -394,7 +395,7 @@ Each of these leaves the asset listed and changes nothing in it. After each one,
 | 4.7 | `"schema": 1` | "Cannot read the JSON", and the error says the file is from an older version of the plugin. |
 | 4.8 | `"FlickerSpeed": 4` (a number) | "Cannot read the JSON": the value must be a string. |
 | 4.9 | Add a top-level field `"reset": []` | "Cannot read the JSON": unknown field. |
-| 4.10 | Add `"components": { "Nope": { "Intensity": "1" } }`, on JSON | Apply fails: unknown component. |
+| 4.10 | Add `"components": { "Nope": { "Intensity": "1" } }` inside `overrides`, on JSON | Apply fails: unknown component. |
 | 4.11 | Git conflict markers (`<<<<<<<`) in the file | "Cannot read the JSON". |
 
 **4.12 JSON with no asset**
@@ -542,7 +543,7 @@ Blueprint first. Add the widget to the viewport from a level Blueprint to see it
 
 **8.3 Unknown widget**
 
-1. Add `"Nope": { "RenderOpacity": "0.5" }` under `widgets`. Refresh, then Apply.
+1. Add `"Nope": { "RenderOpacity": "0.5" }` under `overrides.widgets`. Refresh, then Apply.
 
 Expected: apply fails with "unknown widget". Widgets are not created from JSON.
 

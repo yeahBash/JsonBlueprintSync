@@ -507,8 +507,8 @@ namespace
 		Out += TEXT("}");
 	}
 
-	/** Object name -> property map, written at the top level of the document (indent level 1). */
-	void AppendObjectMaps(FString& Out, const TMap<FString, TMap<FString, FString>>& Maps)
+	/** Object name -> property map, for a field at the given indent level. */
+	void AppendObjectMaps(FString& Out, const TMap<FString, TMap<FString, FString>>& Maps, int32 Level)
 	{
 		if (Maps.Num() == 0)
 		{
@@ -519,13 +519,34 @@ namespace
 		const TArray<FString> Names = SortedKeys(Maps);
 		for (int32 i = 0; i < Names.Num(); ++i)
 		{
-			AppendIndent(Out, 2);
+			AppendIndent(Out, Level + 1);
 			AppendQuoted(Out, Names[i]);
 			Out += TEXT(": ");
-			AppendStringMap(Out, Maps.FindChecked(Names[i]), 2);
+			AppendStringMap(Out, Maps.FindChecked(Names[i]), Level + 1);
 			Out += i + 1 < Names.Num() ? TEXT(",\n") : TEXT("\n");
 		}
-		Out += TEXT("  }");
+		AppendIndent(Out, Level);
+		Out += TEXT("}");
+	}
+
+	/** Path of a field for error messages, e.g. "overrides.self". */
+	FString FieldPath(const FString& Parent, const FString& Name)
+	{
+		return Parent.IsEmpty() ? Name : Parent + TEXT(".") + Name;
+	}
+
+	/** Fails with an error naming the first field of Object that is not in Known. */
+	bool CheckKnownFields(const FJsonObject& Object, const FString& Path, const TSet<FString>& Known, FString& OutError)
+	{
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Object.Values)
+		{
+			if (!Known.Contains(Pair.Key))
+			{
+				OutError = FString::Printf(TEXT("unknown field '%s'"), *FieldPath(Path, Pair.Key));
+				return false;
+			}
+		}
+		return true;
 	}
 
 	bool ReadStringMap(const FJsonObject& Object, const FString& Context, TMap<FString, FString>& Out, FString& OutError)
@@ -542,27 +563,29 @@ namespace
 		return true;
 	}
 
-	bool GetObjectField(const FJsonObject& Root, const TCHAR* Name, TSharedPtr<FJsonObject>& Out, FString& OutError)
+	/** Reads an optional object field of Parent (whose path is ParentPath). Out stays null if the field is missing. */
+	bool GetObjectField(const FJsonObject& Parent, const FString& ParentPath, const TCHAR* Name, TSharedPtr<FJsonObject>& Out, FString& OutError)
 	{
-		const TSharedPtr<FJsonValue>* Value = Root.Values.Find(Name);
+		const TSharedPtr<FJsonValue>* Value = Parent.Values.Find(Name);
 		if (!Value)
 		{
 			return true;
 		}
 		if (!Value->IsValid() || (*Value)->Type != EJson::Object)
 		{
-			OutError = FString::Printf(TEXT("'%s' must be an object"), Name);
+			OutError = FString::Printf(TEXT("'%s' must be an object"), *FieldPath(ParentPath, Name));
 			return false;
 		}
 		Out = (*Value)->AsObject();
 		return true;
 	}
 
-	/** Reads an optional top-level field of object name -> property map, e.g. "components". Empty objects are dropped. */
-	bool ReadObjectMaps(const FJsonObject& Root, const TCHAR* Name, TMap<FString, TMap<FString, FString>>& Out, FString& OutError)
+	/** Reads an optional field of object name -> property map, e.g. "overrides.components". Empty objects are dropped. */
+	bool ReadObjectMaps(const FJsonObject& Parent, const FString& ParentPath, const TCHAR* Name, TMap<FString, TMap<FString, FString>>& Out,
+		FString& OutError)
 	{
 		TSharedPtr<FJsonObject> Object;
-		if (!GetObjectField(Root, Name, Object, OutError))
+		if (!GetObjectField(Parent, ParentPath, Name, Object, OutError))
 		{
 			return false;
 		}
@@ -572,7 +595,7 @@ namespace
 		}
 		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Object->Values)
 		{
-			const FString Context = FString::Printf(TEXT("%s.%s"), Name, *Pair.Key);
+			const FString Context = FieldPath(FieldPath(ParentPath, Name), Pair.Key);
 			if (!Pair.Value.IsValid() || Pair.Value->Type != EJson::Object)
 			{
 				OutError = Context + TEXT(" must be an object");
@@ -702,7 +725,7 @@ FAssetDefaults Capture(UObject* Asset)
 	{
 		// A data asset: its own values against its archetype, the class defaults.
 		Doc.Parent = Asset->GetClass()->GetPathName();
-		CaptureObject(Asset, Asset->GetArchetype(), EObjectRole::Instance, Doc.Defaults);
+		CaptureObject(Asset, Asset->GetArchetype(), EObjectRole::Instance, Doc.Self);
 		return Doc;
 	}
 
@@ -713,7 +736,7 @@ FAssetDefaults Capture(UObject* Asset)
 		return Doc;
 	}
 	UClass* SuperClass = GeneratedClass->GetSuperClass();
-	CaptureObject(GeneratedClass->GetDefaultObject(), SuperClass ? SuperClass->GetDefaultObject() : nullptr, EObjectRole::Template, Doc.Defaults);
+	CaptureObject(GeneratedClass->GetDefaultObject(), SuperClass ? SuperClass->GetDefaultObject() : nullptr, EObjectRole::Template, Doc.Self);
 
 	ForEachComponent(Blueprint, [&Doc](const FString& Name, const FComponentTarget& Target)
 	{
@@ -745,25 +768,24 @@ FString ToJson(const FAssetDefaults& Doc)
 	FString Out;
 	Out += TEXT("{\n");
 	Out += FString::Printf(TEXT("  \"schema\": %d,\n"), FAssetDefaults::SchemaVersion);
-	Out += TEXT("  \"scope\": \"defaults\",\n");
 	Out += TEXT("  \"asset\": ");
 	AppendQuoted(Out, Doc.Asset);
 	Out += TEXT(",\n  \"parent\": ");
 	AppendQuoted(Out, Doc.Parent);
-	Out += TEXT(",\n  \"defaults\": ");
-	AppendStringMap(Out, Doc.Defaults, 1);
+	Out += TEXT(",\n  \"overrides\": {\n    \"self\": ");
+	AppendStringMap(Out, Doc.Self, 2);
 	// Only Blueprints have components and only Widget Blueprints have widgets; leave out what is empty.
 	if (Doc.Components.Num() > 0)
 	{
-		Out += TEXT(",\n  \"components\": ");
-		AppendObjectMaps(Out, Doc.Components);
+		Out += TEXT(",\n    \"components\": ");
+		AppendObjectMaps(Out, Doc.Components, 2);
 	}
 	if (Doc.Widgets.Num() > 0)
 	{
-		Out += TEXT(",\n  \"widgets\": ");
-		AppendObjectMaps(Out, Doc.Widgets);
+		Out += TEXT(",\n    \"widgets\": ");
+		AppendObjectMaps(Out, Doc.Widgets, 2);
 	}
-	Out += TEXT("\n}\n");
+	Out += TEXT("\n  }\n}\n");
 	return Out;
 }
 
@@ -789,20 +811,9 @@ bool FromJson(const FString& Json, FAssetDefaults& OutDoc, FString& OutError)
 		return false;
 	}
 
-	static const TSet<FString> KnownFields = { TEXT("schema"), TEXT("scope"), TEXT("asset"), TEXT("parent"), TEXT("defaults"), TEXT("components"), TEXT("widgets") };
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Root->Values)
+	static const TSet<FString> KnownFields = { TEXT("schema"), TEXT("asset"), TEXT("parent"), TEXT("overrides") };
+	if (!CheckKnownFields(*Root, FString(), KnownFields, OutError))
 	{
-		if (!KnownFields.Contains(Pair.Key))
-		{
-			OutError = FString::Printf(TEXT("unknown field '%s'"), *Pair.Key);
-			return false;
-		}
-	}
-
-	FString Scope;
-	if (!Root->TryGetStringField(TEXT("scope"), Scope) || !EqualsExact(Scope, TEXT("defaults")))
-	{
-		OutError = TEXT("'scope' must be \"defaults\"");
 		return false;
 	}
 	if (!Root->TryGetStringField(TEXT("asset"), OutDoc.Asset) || OutDoc.Asset.IsEmpty())
@@ -812,20 +823,37 @@ bool FromJson(const FString& Json, FAssetDefaults& OutDoc, FString& OutError)
 	}
 	Root->TryGetStringField(TEXT("parent"), OutDoc.Parent);
 
-	TSharedPtr<FJsonObject> Defaults;
-	if (!GetObjectField(*Root, TEXT("defaults"), Defaults, OutError)
-		|| (Defaults.IsValid() && !ReadStringMap(*Defaults, TEXT("defaults"), OutDoc.Defaults, OutError)))
+	// A missing "overrides" or "self" means that nothing differs from the archetype.
+	TSharedPtr<FJsonObject> Overrides;
+	if (!GetObjectField(*Root, FString(), TEXT("overrides"), Overrides, OutError))
 	{
 		return false;
 	}
-	return ReadObjectMaps(*Root, TEXT("components"), OutDoc.Components, OutError)
-		&& ReadObjectMaps(*Root, TEXT("widgets"), OutDoc.Widgets, OutError);
+	if (!Overrides.IsValid())
+	{
+		return true;
+	}
+	const FString OverridesPath = TEXT("overrides");
+	static const TSet<FString> KnownOverrides = { TEXT("self"), TEXT("components"), TEXT("widgets") };
+	if (!CheckKnownFields(*Overrides, OverridesPath, KnownOverrides, OutError))
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> Self;
+	if (!GetObjectField(*Overrides, OverridesPath, TEXT("self"), Self, OutError)
+		|| (Self.IsValid() && !ReadStringMap(*Self, FieldPath(OverridesPath, TEXT("self")), OutDoc.Self, OutError)))
+	{
+		return false;
+	}
+	return ReadObjectMaps(*Overrides, OverridesPath, TEXT("components"), OutDoc.Components, OutError)
+		&& ReadObjectMaps(*Overrides, OverridesPath, TEXT("widgets"), OutDoc.Widgets, OutError);
 }
 
 TMap<FString, FString> Flatten(const FAssetDefaults& Doc)
 {
 	TMap<FString, FString> Result;
-	for (const TPair<FString, FString>& Pair : Doc.Defaults)
+	for (const TPair<FString, FString>& Pair : Doc.Self)
 	{
 		Result.Add(Pair.Key, Pair.Value);
 	}
@@ -967,7 +995,7 @@ FApplyResult Apply(UObject* Asset, const FAssetDefaults& Doc)
 
 	// Pass 1: validate everything and parse the values. Nothing is written if anything is wrong.
 	TArray<FPendingWrite> Writes;
-	PrepareObject(FString(), &Doc.Defaults, &Current.Defaults, DefaultsTarget, Result, Writes);
+	PrepareObject(FString(), &Doc.Self, &Current.Self, DefaultsTarget, Result, Writes);
 	PrepareObjects(TEXT("components"), TEXT("component"), Doc.Components, Current.Components, GetComponentTarget, Writes);
 	PrepareObjects(TEXT("widgets"), TEXT("widget"), Doc.Widgets, Current.Widgets, GetWidgetTarget, Writes);
 	if (Result.HasErrors())

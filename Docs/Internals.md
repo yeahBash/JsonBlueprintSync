@@ -48,7 +48,7 @@ The same data comes in three forms:
 | Form | Type | Where |
 |---|---|---|
 | The asset | `UBlueprint`, `UWidgetBlueprint`, `UDataAsset` and their CDO, component templates and widgets | memory, `.uasset` |
-| Document | `FAssetDefaults`: `Defaults`, `Components`, `Widgets` maps of property text | memory |
+| Document | `FAssetDefaults`: `Self`, `Components`, `Widgets` maps of property text (`overrides.self`, `.components`, `.widgets`) | memory |
 | JSON | text written by `ToJson`, read by `FromJson` | `<JsonDir>/Game/...json` |
 
 `Capture` turns an asset into a document, and `Apply` turns a document back into asset values. `ToJson` and `FromJson` convert
@@ -214,9 +214,9 @@ Sources by asset kind:
 | Section | Blueprint | Widget Blueprint | Data asset |
 |---|---|---|---|
 | `parent` | parent class path | parent class path | the asset's class path |
-| `defaults` | `GeneratedClass` CDO vs. super-class CDO (Template) | same | the asset vs. `GetArchetype()` = class CDO (Instance) |
-| `components` | see below | none (widgets are not components) | none |
-| `widgets` | none | every widget in `WidgetTree` and its `Slot` | none |
+| `overrides.self` | `GeneratedClass` CDO vs. super-class CDO (Template) | same | the asset vs. `GetArchetype()` = class CDO (Instance) |
+| `overrides.components` | see below | none (widgets are not components) | none |
+| `overrides.widgets` | none | every widget in `WidgetTree` and its `Slot` | none |
 
 **Components.** `ForEachComponent` visits three sources, in order:
 
@@ -249,8 +249,8 @@ Caveats:
 
 `ToJson` writes the JSON by hand, not through `FJsonSerializer`, so that the output is byte-stable:
 
-- the top-level order is fixed: `schema`, `scope`, `asset`, `parent`, `defaults`, then `components` and `widgets` only if they are
-  not empty;
+- the top-level order is fixed: `schema`, `asset`, `parent`, `overrides`. Inside `overrides`: `self` (always, `{}` if empty),
+  then `components` and `widgets` only if they are not empty;
 - keys are sorted **case-sensitively** (ordinal), so `Z` comes before `a`;
 - two-space indent, `\n` line endings, a trailing newline, no timestamps;
 - strings are escaped as JSON requires (`\"`, `\\`, `\n`, `\t`, other control characters as `\u00XX`). Non-ASCII characters are
@@ -264,13 +264,15 @@ So `ToJson(FromJson(ToJson(X))) == ToJson(X)`, and exporting the same asset twic
 
 1. The text is valid JSON with an object at the root.
 2. `schema` is 2. Schema 1 gives "from an older version of the plugin; re-export"; anything else gives "'schema' must be 2".
-3. No unknown top-level field. This is how a schema-1 field such as `reset` is caught.
-4. `scope` is exactly `"defaults"`.
-5. `asset` is present and non-empty.
-6. `parent` is optional.
-7. `defaults` is an object of string values. `components` and `widgets` are objects of objects of string values. A number or a bool
-   where a string is expected is an error ("value must be a string of Unreal property text"). Empty component and widget objects
-   are dropped.
+3. No unknown top-level field. This is how a schema-1 field such as `reset` is caught, and the `defaults` layout from before
+   `overrides` (also schema 2) gives "unknown field 'scope'".
+4. `asset` is present and non-empty.
+5. `parent` is optional.
+6. `overrides` is optional (missing means nothing is overridden) and must be an object with no fields other than `self`,
+   `components` and `widgets`, each optional. `self` is an object of string values; `components` and `widgets` are objects of
+   objects of string values. A number or a bool where a string is expected is an error ("value must be a string of Unreal property
+   text"). Errors name the field by its path, e.g. `overrides.self.Damage` or `overrides.components.Light`. Empty component and
+   widget objects are dropped.
 
 Caveats:
 
@@ -302,7 +304,7 @@ override the asset has that the document does not list is reset to the archetype
 2. A Blueprint must have a generated class ("compile it first").
 3. `Current = Capture(Asset)` lists the asset's current overrides.
 4. If `Doc.Parent` is set and differs from the asset's parent, add a warning only.
-5. For each object (defaults, then each component name and each widget name in either the document or `Current`), find the
+5. For each object (`self`, then each component name and each widget name in either the document or `Current`), find the
    target object. An unknown component or widget is an error. Then, for each property:
    - In the document: find the property by exact, case-sensitive name. A wrong case gives "unknown property (did you mean
      'Speed'?)". Check `IsSyncable`, then parse the text onto a **copy of the archetype's value** (`PrepareWrite`).
@@ -391,7 +393,7 @@ result, which resets it to the archetype. This is how a partial choice becomes t
 Details:
 
 - A key is split at the **last** `.`: `Title.Slot.ZOrder` → object `Title.Slot`, property `ZOrder`. A key without a `.` is a
-  `defaults` key.
+  `self` key.
 - Whether an object name is a widget or a component is decided by which section has it, in `Source` or `Current`. A Blueprint has
   either components or widgets, never both, so there is no ambiguity in practice.
 - Objects left with no values are removed.
@@ -799,7 +801,7 @@ Caveats:
 
 | Test | Covers |
 |---|---|
-| `Format` | output format, key order, escaping, round trip, rejected documents (bad JSON, schema 1 and 3, wrong scope, missing asset, `reset` field, number value), path mapping, hash ignoring line endings |
+| `Format` | output format, key order, escaping, round trip, rejected documents (bad JSON, schema 1 and 3, the old `defaults` layout, missing asset, `reset` field, unknown fields at the top level and in `overrides`, non-object `overrides` or component, number value), a file without `overrides`, path mapping, hash ignoring line endings |
 | `RoundTrip` | capture → import → capture is stable; re-importing the export changes nothing |
 | `Propagation` | a parent import reaches the child CDO and placed instances, but not values they override |
 | `RejectsBadValues` | unknown property, wrong case, bad array, unknown struct field, trailing text, unknown component or property, wrong asset; nothing applied in each case |
