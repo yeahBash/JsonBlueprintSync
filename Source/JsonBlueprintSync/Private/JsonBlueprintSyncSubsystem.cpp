@@ -30,12 +30,15 @@ using namespace JsonBlueprintSync;
 
 namespace
 {
-	/** The subsystem only syncs project content. The commandlet's -dir= covers other mount points. */
-	const TCHAR* SyncedRoot = TEXT("/Game");
-
-	bool IsSyncedPackage(const FString& PackageName)
+	/** A data asset in a synced folder. */
+	bool IsSynced(const FAssetData& Asset)
 	{
-		return PackageName.StartsWith(FString(SyncedRoot) + TEXT("/")) && !FPackageName::IsTempPackage(PackageName);
+		return IsSyncedPackage(Asset.PackageName.ToString()) && IsDataAsset(Asset);
+	}
+
+	bool IsSynced(const UObject* Asset)
+	{
+		return Asset && IsSyncedPackage(Asset->GetPackage()->GetName()) && IsDataAsset(Asset);
 	}
 
 	bool IsDirty(const UObject* Asset)
@@ -112,7 +115,7 @@ namespace
 		return Hash.IsZero() ? FString() : LexToString(Hash);
 	}
 
-	/** The JSON names a parent or class and it is not the asset's. An empty parent in the JSON makes no claim. */
+	/** The JSON names a class and it is not the asset's. An empty parent field in the JSON makes no claim. */
 	bool ParentDiffers(const FAssetDefaults& File, const FAssetDefaults& Current)
 	{
 		return !File.Parent.IsEmpty() && !File.Parent.Equals(Current.Parent, ESearchCase::CaseSensitive);
@@ -170,7 +173,7 @@ void UJsonBlueprintSyncSubsystem::Initialize(FSubsystemCollectionBase& Collectio
 		TEXT("Checks for JSON files that changed on disk since the last sync (e.g. after a git pull) and lists them in the JSON Sync tab."),
 		FConsoleCommandDelegate::CreateUObject(this, &UJsonBlueprintSyncSubsystem::SyncFromJson));
 
-	UE_LOG(LogJsonBlueprintSync, Log, TEXT("Syncing assets under %s with %s"), SyncedRoot, *GetJsonRoot());
+	UE_LOG(LogJsonBlueprintSync, Log, TEXT("Syncing data assets under %s with %s"), *FString::Join(GetSyncedRoots(), TEXT(", ")), *GetJsonRoot());
 }
 
 void UJsonBlueprintSyncSubsystem::Deinitialize()
@@ -343,18 +346,6 @@ bool UJsonBlueprintSyncSubsystem::DeleteJsonFile(const FString& Path)
 	return true;
 }
 
-EAssetKind UJsonBlueprintSyncSubsystem::GetSyncedKind(const FAssetData& Asset) const
-{
-	const EAssetKind Kind = GetAssetKind(Asset);
-	return GetDefault<UJsonBlueprintSyncSettings>()->GetMode(Kind) == EJsonSyncMode::None ? EAssetKind::None : Kind;
-}
-
-EAssetKind UJsonBlueprintSyncSubsystem::GetSyncedKind(const UObject* Asset) const
-{
-	const EAssetKind Kind = GetAssetKind(Asset);
-	return GetDefault<UJsonBlueprintSyncSettings>()->GetMode(Kind) == EJsonSyncMode::None ? EAssetKind::None : Kind;
-}
-
 void UJsonBlueprintSyncSubsystem::Notify(const FText& Text, ENotice Level)
 {
 	FNotificationInfo Info(Text);
@@ -402,14 +393,30 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 	const UJsonBlueprintSyncSettings* Settings = GetDefault<UJsonBlueprintSyncSettings>();
 	const FString JsonRoot = GetJsonRoot();
 	TArray<FString> Errors;
-	TArray<FString> TwoWay;
+	const bool bAutomatic = Settings->Mode == EJsonSyncMode::Automatic;
+	TArray<FString> ToAutoApply;
 	TSet<FString> Seen;
 	int32 Checked = 0;
-	for (const FString& File : FindJsonFiles(JsonRoot, SyncedRoot))
+	TArray<FString> Files;
+	for (const FString& Root : GetSyncedRoots())
+	{
+		Files.Append(FindJsonFiles(JsonRoot, Root));
+	}
+	for (const FString& File : Files)
 	{
 		FString PackageName;
+		if (!JsonBlueprintSync::GetPackageName(JsonRoot, File, PackageName))
+		{
+			// Reported by ReportMissingPairs.
+			continue;
+		}
+		if (!IsSyncedPackage(PackageName))
+		{
+			// In an excluded folder: not synced at all.
+			continue;
+		}
 		FString Text;
-		if (!JsonBlueprintSync::GetPackageName(JsonRoot, File, PackageName) || !FFileHelper::LoadFileToString(Text, *File))
+		if (!FFileHelper::LoadFileToString(Text, *File))
 		{
 			Errors.Add(FString::Printf(TEXT("%s: cannot read the file"), *File));
 			continue;
@@ -439,16 +446,11 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 			continue;
 		}
 
+		// A JSON file without its data asset is reported by ReportMissingPairs.
 		const TOptional<FAssetData> Asset = FindMainAsset(PackageName);
-		if (!Asset)
+		if (!Asset || !IsDataAsset(*Asset))
 		{
-			Errors.Add(FString::Printf(TEXT("%s: no asset %s"), *File, *PackageName));
-			continue;
-		}
-		const EAssetKind Kind = GetSyncedKind(*Asset);
-		if (Kind == EAssetKind::None)
-		{
-			if (Pending.Remove(PackageName) > 0 || (Entry && Entry->bPending))
+			if (Pending.Remove(PackageName) > 0 || Entry)
 			{
 				Cache.Remove(PackageName);
 			}
@@ -466,17 +468,17 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 		}
 		else
 		{
-			bPending = Detect(PackageName, Text, FileHash, Kind, bAssetChanged, Errors);
+			bPending = Detect(PackageName, Text, FileHash, bAssetChanged, Errors);
 		}
 		if (!bPending)
 		{
 			Undone.Remove(PackageName);
 		}
-		else if (Settings->GetMode(Kind) == EJsonSyncMode::TwoWay)
+		else if (bAutomatic)
 		{
 			// An undone Apply JSON is still in the undo history (as a redo step, or under the edits made since), so the auto-apply
 			// below leaves such an asset for the user.
-			TwoWay.Add(PackageName);
+			ToAutoApply.Add(PackageName);
 		}
 	}
 
@@ -501,11 +503,12 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 		Notify(FText::Format(LOCTEXT("SyncErrors", "JSON Sync: {0} JSON files could not be checked. See the Output Log (LogJsonBlueprintSync)."),
 			FText::AsNumber(Errors.Num())), ENotice::Error);
 	}
+	ReportMissingPairs();
 
-	// Two Way: apply what only the JSON changed. Conflicts, a different parent and a JSON that is only out of date stay in the
+	// Automatic: apply what only the JSON changed. Conflicts, a different class and a JSON that is only out of date stay in the
 	// list for the user.
 	TArray<TPair<FString, TArray<FString>>> Requests;
-	for (const FString& PackageName : TwoWay)
+	for (const FString& PackageName : ToAutoApply)
 	{
 		FPendingView View;
 		if (!GetPendingView(PackageName, View) || !View.Error.IsEmpty() || !CanAutoApply(View.bHasBase, View.ParentDiffers(), View.Keys))
@@ -548,14 +551,13 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 	OnPendingChanged.Broadcast();
 }
 
-bool UJsonBlueprintSyncSubsystem::Detect(const FString& PackageName, const FString& Text, const FString& FileHash, EAssetKind Kind, bool bAssetChanged,
+bool UJsonBlueprintSyncSubsystem::Detect(const FString& PackageName, const FString& Text, const FString& FileHash, bool bAssetChanged,
 	TArray<FString>& OutErrors)
 {
 	const FSyncEntry* Entry = Cache.Find(PackageName);
 	const TOptional<FSyncEntry> OldEntry = Entry ? TOptional<FSyncEntry>(*Entry) : TOptional<FSyncEntry>();
 
 	FPending State;
-	State.Kind = Kind;
 	State.FileHash = FileHash;
 	FAssetDefaults FileDoc;
 	if (FromJson(Text, FileDoc, State.Error))
@@ -574,7 +576,7 @@ bool UJsonBlueprintSyncSubsystem::Detect(const FString& PackageName, const FStri
 	const bool bParentDiffers = State.File && ParentDiffers(*State.File, Current);
 	if (State.File && !bParentDiffers && ValuesEqual(*State.File, Current))
 	{
-		// They match, e.g. a teammate committed both, or only the asset's graph changed. Record saved state only: recording an
+		// They match, e.g. a teammate committed both, or only values the JSON does not hold changed. Record saved state only: recording an
 		// unsaved match would hide the difference after an editor restart.
 		Pending.Remove(PackageName);
 		if (!IsDirty(Asset))
@@ -628,7 +630,7 @@ bool UJsonBlueprintSyncSubsystem::Detect(const FString& PackageName, const FStri
 	}
 	if (bParentDiffers)
 	{
-		UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: the JSON was written for parent %s, the asset's parent is %s"), *PackageName,
+		UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: the JSON was written for class %s, the asset's class is %s"), *PackageName,
 			*State.File->Parent, *Current.Parent);
 	}
 
@@ -665,7 +667,6 @@ bool UJsonBlueprintSyncSubsystem::GetPendingView(const FString& PackageName, FPe
 	}
 	OutView = FPendingView();
 	OutView.PackageName = PackageName;
-	OutView.Kind = State->Kind;
 	OutView.bHasBase = State->Base.IsSet();
 	if (!State->File)
 	{
@@ -757,7 +758,6 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 		FString PackageName;
 		UObject* Asset = nullptr;
 		FAssetDefaults Doc;
-		int32 Order = 0;
 	};
 	TArray<FItem> Items;
 	TArray<FString> Failed;
@@ -775,19 +775,15 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 		Item.PackageName = Request.Key;
 		Item.Asset = Asset;
 		Item.Doc = TakeKeys(Capture(Asset), *State->File, Request.Value);
-		Item.Order = GetApplyOrder(Asset);
 	}
-	// A child's values are a delta on its parent, and a data asset's on its class, so parents go first.
-	Items.StableSort([](const FItem& A, const FItem& B) { return A.Order < B.Order; });
 
 	TArray<FString> Changed;
 	TArray<FString> Succeeded;
 	TSet<FString> ChangedPackages;
 	FGuid TransactionId;
 	{
-		// One transaction, so a single Ctrl+Z reverts the whole apply. No compile: compiling replaces the CDO, which would make the
-		// change impossible to undo. Values on the CDO and the templates survive the next compile, as with Details-panel edits.
-		// An automatic (Two Way) apply has no transaction: the JSON is the source of truth, and Ctrl+Z must not revert a change
+		// One transaction, so a single Ctrl+Z reverts the whole apply.
+		// An Automatic mode apply has no transaction: the JSON is the source of truth, and Ctrl+Z must not revert a change
 		// that came with it (e.g. from a teammate). Modify() without a transaction only marks the package dirty.
 		TUniquePtr<FScopedTransaction> Transaction;
 		if (!bAutomatic)
@@ -864,12 +860,12 @@ TArray<FString> UJsonBlueprintSyncSubsystem::ApplyBatch(const TArray<TPair<FStri
 		}
 		if (bNotify && Saved.Num() > 0)
 		{
-			Notify(FText::Format(LOCTEXT("AppliedAutomatically", "Applied JSON to {0} automatically (Two Way) and saved it."),
+			Notify(FText::Format(LOCTEXT("AppliedAutomatically", "Applied JSON to {0} automatically and saved it."),
 				FText::FromString(JoinShort(Saved))), ENotice::Success);
 		}
 		if (NotSaved.Num() > 0)
 		{
-			Notify(FText::Format(LOCTEXT("AppliedAutomaticallyNotSaved", "Applied JSON to {0} automatically (Two Way), but it was not saved. Save it to keep the change; Ctrl+Z does not revert it."),
+			Notify(FText::Format(LOCTEXT("AppliedAutomaticallyNotSaved", "Applied JSON to {0} automatically, but it was not saved. Save it to keep the change; Ctrl+Z does not revert it."),
 				FText::FromString(JoinShort(NotSaved))), ENotice::Warning);
 		}
 	}
@@ -907,7 +903,6 @@ void UJsonBlueprintSyncSubsystem::Resolve(const FString& PackageName, UObject* A
 	{
 		// The next save writes the JSON, including the keys where the user kept the asset's value, unless the JSON changes again.
 		FResolved& Res = Resolved.Add(PackageName);
-		Res.Kind = GetSyncedKind(Asset);
 		if (Before && !Before->FileHash.IsEmpty())
 		{
 			Res.FileHash = Before->FileHash;
@@ -939,7 +934,6 @@ void UJsonBlueprintSyncSubsystem::MarkChangedAfterReview(const FString& PackageN
 	FResolved Res;
 	Resolved.RemoveAndCopyValue(PackageName, Res);
 	FPending State;
-	State.Kind = Res.Kind;
 	State.FileHash = HashText(Text);
 	FAssetDefaults FileDoc;
 	if (FromJson(Text, FileDoc, State.Error))
@@ -977,7 +971,6 @@ bool UJsonBlueprintSyncSubsystem::OverwriteJson(const FString& PackageName)
 		// The file on disk (the one just written, or the old one if the write failed) counts as reviewed: the next save writes the
 		// JSON, unless the file changes again before that.
 		FResolved& Res = Resolved.Add(PackageName);
-		Res.Kind = GetSyncedKind(Asset);
 		FString Text;
 		Res.FileHash = ReadJsonHash(GetJsonPath(PackageName), Text);
 		FAssetDefaults Doc;
@@ -1082,6 +1075,37 @@ void UJsonBlueprintSyncSubsystem::ShowPendingNotification()
 	}
 }
 
+void UJsonBlueprintSyncSubsystem::ReportMissingPairs()
+{
+	const FMissingPairs Missing = FindMissingPairs(GetJsonRoot());
+	if (Missing.IsEmpty())
+	{
+		return;
+	}
+	for (const FString& File : Missing.JsonWithoutAsset)
+	{
+		UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: no data asset for this JSON file. Delete the file if the asset was deleted on purpose, or restore the asset."),
+			*File);
+	}
+	for (const FString& PackageName : Missing.AssetsWithoutJson)
+	{
+		UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: the data asset has no JSON file. Save the asset or run -run=JsonBlueprintSync -export, or add its folder to Excluded Folders."),
+			*PackageName);
+	}
+
+	TArray<FString> Lines;
+	if (Missing.JsonWithoutAsset.Num() > 0)
+	{
+		Lines.Add(FString::Printf(TEXT("%d JSON files have no data asset"), Missing.JsonWithoutAsset.Num()));
+	}
+	if (Missing.AssetsWithoutJson.Num() > 0)
+	{
+		Lines.Add(FString::Printf(TEXT("%d data assets have no JSON file"), Missing.AssetsWithoutJson.Num()));
+	}
+	Notify(FText::Format(LOCTEXT("MissingPairs", "JSON Sync: {0}. See the Output Log (LogJsonBlueprintSync) for how to fix each one."),
+		FText::FromString(FString::Join(Lines, TEXT(", ")))), ENotice::Warning);
+}
+
 void UJsonBlueprintSyncSubsystem::NotifySaveSkipped(const FString& PackageName, bool bChangedAfterReview)
 {
 	UE_LOG(LogJsonBlueprintSync, Warning, TEXT("Saved %s but did not write %s: the JSON has changes that are not reviewed"),
@@ -1107,13 +1131,8 @@ void UJsonBlueprintSyncSubsystem::OnPackageSaved(const FString& PackageFileName,
 		return;
 	}
 	const FString PackageName = Package->GetName();
-	if (!IsSyncedPackage(PackageName))
-	{
-		return;
-	}
 	UObject* Asset = Package->FindAssetInPackage();
-	const EAssetKind Kind = GetSyncedKind(Asset);
-	if (Kind == EAssetKind::None)
+	if (!IsSynced(Asset))
 	{
 		return;
 	}
@@ -1153,7 +1172,6 @@ void UJsonBlueprintSyncSubsystem::OnPackageSaved(const FString& PackageFileName,
 	if (FPaths::FileExists(Path) && FFileHelper::LoadFileToString(Text, *Path) && (!Entry || Entry->JsonHash != HashText(Text)))
 	{
 		FPending State;
-		State.Kind = Kind;
 		State.FileHash = HashText(Text);
 		FAssetDefaults FileDoc;
 		if (FromJson(Text, FileDoc, State.Error))
@@ -1178,7 +1196,7 @@ void UJsonBlueprintSyncSubsystem::OnAssetRenamed(const FAssetData& Asset, const 
 {
 	const FString OldPackage = FPackageName::ObjectPathToPackageName(OldObjectPath);
 	const FString NewPackage = Asset.PackageName.ToString();
-	if (!IsSyncedPackage(OldPackage) || OldPackage == NewPackage || GetSyncedKind(Asset) == EAssetKind::None)
+	if (!IsSyncedPackage(OldPackage) || OldPackage == NewPackage || !IsDataAsset(Asset))
 	{
 		return;
 	}
@@ -1225,7 +1243,7 @@ void UJsonBlueprintSyncSubsystem::OnAssetRenamed(const FAssetData& Asset, const 
 
 void UJsonBlueprintSyncSubsystem::OnAssetRemoved(const FAssetData& Asset)
 {
-	if (!IsSyncedPackage(Asset.PackageName.ToString()) || GetSyncedKind(Asset) == EAssetKind::None)
+	if (!IsSyncedPackage(Asset.PackageName.ToString()) || !IsDataAsset(Asset))
 	{
 		return;
 	}

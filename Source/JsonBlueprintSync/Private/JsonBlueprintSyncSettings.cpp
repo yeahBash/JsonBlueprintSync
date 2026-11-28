@@ -9,18 +9,6 @@ UJsonBlueprintSyncSettings::UJsonBlueprintSyncSettings()
 	SectionName = TEXT("JsonBlueprintSync");
 }
 
-EJsonSyncMode UJsonBlueprintSyncSettings::GetMode(JsonBlueprintSync::EAssetKind Kind) const
-{
-	auto NoTwoWay = [](EJsonSyncMode Mode) { return Mode == EJsonSyncMode::TwoWay ? EJsonSyncMode::WriteJsonOnly : Mode; };
-	switch (Kind)
-	{
-	case JsonBlueprintSync::EAssetKind::Blueprint: return NoTwoWay(Blueprints);
-	case JsonBlueprintSync::EAssetKind::WidgetBlueprint: return NoTwoWay(WidgetBlueprints);
-	case JsonBlueprintSync::EAssetKind::DataAsset: return DataAssets;
-	default: return EJsonSyncMode::None;
-	}
-}
-
 FName UJsonBlueprintSyncSettings::GetCategoryName() const
 {
 	return TEXT("Plugins");
@@ -34,7 +22,7 @@ FText UJsonBlueprintSyncSettings::GetSectionText() const
 
 FText UJsonBlueprintSyncSettings::GetSectionDescription() const
 {
-	return LOCTEXT("SettingsDescription", "Keeps Blueprint, Widget Blueprint and data asset values in JSON files next to the project.");
+	return LOCTEXT("SettingsDescription", "Keeps data asset values in JSON files next to the project. The JSON is the source of truth.");
 }
 #endif
 

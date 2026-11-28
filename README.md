@@ -1,16 +1,16 @@
 # JsonBlueprintSync
 
-An Unreal Engine editor plugin that keeps the values set in **Blueprints, Widget Blueprints and data assets** in JSON files next
-to the project:
+An Unreal Engine editor plugin that keeps the values of **data assets** in JSON files next to the project. **The JSON is the
+source of truth**: the `.uasset` follows it.
 
-- When you save an asset in the editor, its JSON file is written.
-- When the JSON files change on disk (e.g. after a `git pull`), the editor lists the assets whose JSON differs and lets you apply
-  the changes key by key. For data assets this can happen automatically.
+- When you save a data asset in the editor, its JSON file is written.
+- When the JSON files change on disk (e.g. after a `git pull`), the changes are applied to the assets, either automatically or key by
+  key in the JSON Sync tab.
 
-`.uasset` files are binary, so this gives you diffs, code review and merges for default values. Only values that differ from the
-archetype are stored (the parent class for a Blueprint, the class for a data asset), so a file holds just what the asset itself sets.
+`.uasset` files are binary, so this gives you diffs, code review and merges for data. Only values that differ from the class
+defaults are stored, so a file holds just what the asset itself sets.
 
-Graph logic (nodes and pins) is out of scope.
+Blueprints and Widget Blueprints are not synced.
 
 ## Requirements
 
@@ -44,7 +44,8 @@ Graph logic (nodes and pins) is out of scope.
 
    Files are compared byte for byte, and CRLF checkouts on Windows would otherwise show every file as changed.
 
-4. Commit the JSON folder (`<Project>/JsonBlueprintSync/` by default) alongside the assets.
+4. Write the JSON of the existing data assets once, with the commandlet's `-export` (see below), and commit the JSON folder
+   (`<Project>/JsonBlueprintSync/` by default) alongside the assets.
 
 ### Prebuilt copy for Blueprint-only projects
 
@@ -54,30 +55,29 @@ Graph logic (nodes and pins) is out of scope.
 
 Copy the output folder to the project's `Plugins/JsonBlueprintSync/`. Binaries only work with the engine version they were built with.
 
+## What is synced
+
+- Every data asset: an asset whose class derives from `UDataAsset`, including `UPrimaryDataAsset` and Blueprint subclasses of either.
+  Only a package's main asset is synced.
+- Under `/Game` and the content of the project's own plugins (e.g. `/MyPlugin`). Engine and engine plugin content is not synced,
+  and neither is the content of a plugin that is disabled.
+- Not in a folder listed in **Excluded Folders** (see Settings), e.g. a marketplace pack.
+- Only properties editable on the asset in the Details panel. See Limitations for what is skipped.
+
 ## Modes
 
-Each asset type has a mode, set in **Project Settings > Plugins > JSON Blueprint Sync**:
+Set in **Project Settings > Plugins > JSON Blueprint Sync**. Saving a data asset writes its JSON in both modes.
 
-| Mode | Saving the asset | JSON changed on disk |
-|---|---|---|
-| **None** | Nothing. | Ignored. |
-| **Write JSON Only** | Writes the JSON. | Listed in the JSON Sync tab. Applied only when you choose the values and click **Apply**. |
-| **Two Way** | Writes the JSON. | Applied automatically when the editor starts, unless a key conflicts or the parent differs. Those are listed in the JSON Sync tab. The automatic apply saves the asset and cannot be undone with Ctrl+Z. |
+| Mode | JSON changed on disk |
+|---|---|
+| **Automatic** (default) | Applied when the editor starts (or on Refresh), and the asset is saved. Not applied when a key conflicts or the class differs: those are listed in the JSON Sync tab. |
+| **Manual** | Listed in the JSON Sync tab, where you apply the changes key by key. Applying is an undo step and does not save the asset. |
 
-| Asset type | Default | Two Way allowed |
-|---|---|---|
-| Blueprints | Write JSON Only | No |
-| Widget Blueprints | Write JSON Only | No |
-| Data assets | Two Way | Yes |
-
-For Blueprints the `.uasset` stays the source of truth: the JSON is for reviewing and merging, and changes come back only when
-someone chooses to apply them. Data assets are plain data, so a JSON edit can be trusted to apply on its own.
-
-For Two Way the JSON is the source of truth. The automatic apply saves the asset at once (checking it out first if source control
-needs it), so the `.uasset` on disk, which is what the game uses, matches the JSON. It is not an undo step: Ctrl+Z cannot quietly
-bring back the old values and have the next save write them over a teammate's change. To back out a JSON change, edit the values
-and save (which writes the JSON), or revert the JSON file in source control. If the save does not happen (e.g. you decline the
-checkout), a warning says so and the asset is left modified: save it yourself.
+The automatic apply saves the asset at once (checking it out first if source control needs it), so the `.uasset` on disk, which is
+what the game uses, matches the JSON. It is not an undo step: Ctrl+Z cannot quietly bring back the old values and have the next save
+write them over a teammate's change. To back out a JSON change, edit the values and save (which writes the JSON), or revert the JSON
+file in source control. If the save does not happen (e.g. you decline the checkout), a warning says so and the asset is left
+modified: save it yourself.
 
 Two checks keep this safe. They matter only for a Refresh or `JsonBlueprintSync.Sync` later in the session; at editor start
 neither applies. An asset is not applied automatically, but listed in the JSON Sync tab with a log line, if:
@@ -86,21 +86,21 @@ neither applies. An asset is not applied automatically, but listed in the JSON S
 - it is in the undo history of this session (you edited it, or undid an apply), because undoing those steps would bring back
   the values from before the apply.
 
+An asset whose `.uasset` changed while its JSON did not is never changed automatically, in either mode: see **asset changed**
+below.
+
 ## JSON format
 
-One file per asset under `/Game`, at `<JsonDir>/<package path>.json`. For example, `/Game/Features/Light/BP_Lamp` maps to
-`JsonBlueprintSync/Game/Features/Light/BP_Lamp.json`.
+One file per data asset, at `<JsonDir>/<package path>.json`. For example, `/Game/Features/Light/DA_Lamp` maps to
+`JsonBlueprintSync/Game/Features/Light/DA_Lamp.json`, and `/MyPlugin/DA_Lamp` to `JsonBlueprintSync/MyPlugin/DA_Lamp.json`.
 
 ```json
 {
   "schema": 2,
-  "asset": "/Game/Features/Light/BP_Lamp",
-  "parent": "/Script/Engine.Actor",
+  "asset": "/Game/Features/Light/DA_Lamp",
+  "parent": "/Script/MyGame.LampData",
   "overrides": {
-    "self": { "bStartOn": "True", "FlickerSpeed": "2.5" },
-    "components": {
-      "PointLight": { "Intensity": "5000.0", "LightColor": "(R=255,G=200,B=150,A=255)" }
-    }
+    "self": { "bStartOn": "True", "FlickerSpeed": "2.5", "Tint": "(R=1.000000,G=0.800000,B=0.600000,A=1.000000)" }
   }
 }
 ```
@@ -108,53 +108,22 @@ One file per asset under `/Game`, at `<JsonDir>/<package path>.json`. For exampl
 - **Values are Unreal property text**: the same format as copy/paste in the Details panel, stored as JSON strings. Structs,
   enums, object references and soft paths round-trip exactly. A value that does not parse is reported as an error and nothing in
   that file is applied.
-- **`overrides`** holds every value the asset sets, i.e. every value that differs from its archetype:
-  - **`self`**: the Blueprint's class default object, or a data asset's own properties.
-  - **`components`** (Blueprints): component templates, keyed by component name. This covers components added in this
-    Blueprint, inherited from a parent Blueprint, or created in C++.
-  - **`widgets`** (Widget Blueprints, see below): the Designer's widgets.
-  - A missing `overrides`, `self`, `components` or `widgets` means that nothing in it is overridden.
-- **The file is complete: a missing key means the archetype's value.** Deleting a line and applying the file resets that property
-  to the parent's (or the class's) value.
-- **A struct lists only the fields that differ from the archetype**, as Unreal saves it, e.g. `"(A=5.000000)"`. A missing
-  field takes the archetype's value. Structs that Unreal saves as a unit (colours, vectors, rotators, quaternions) list every
-  field. Arrays, sets and maps are replaced whole.
-- **`parent`** is the parent class of a Blueprint, or the class of a data asset. It is not applied: reparenting is done in the
-  editor. If it differs from the asset's (e.g. the Blueprint was reparented), the values in the file are relative to another
-  archetype. The editor then lists the asset as **parent differs** and applies nothing automatically, and the commandlet logs a
-  warning.
+- **`overrides.self`** holds every value the asset sets, i.e. every value that differs from its class defaults. A missing
+  `overrides` or `self` means that nothing is overridden. Any other field under `overrides` is an error.
+- **The file is complete: a missing key means the class default.** Deleting a line and applying the file resets that property to
+  the class's value.
+- **A struct lists only the fields that differ from the class default**, as Unreal saves it, e.g. `"(A=5.000000)"`. A missing
+  field takes the class default. Structs that Unreal saves as a unit (colours, vectors, rotators, quaternions) list every field.
+  Arrays, sets and maps are replaced whole.
+- **`parent`** is the class of the data asset. It is not applied. If it differs from the asset's class, the values in the file are
+  relative to other defaults. The editor then lists the asset as **class differs** and applies nothing automatically, and the
+  commandlet logs a warning.
 - Output is deterministic: sorted keys, two-space indent, LF line endings, trailing newline, no timestamps. Applying a file and
   writing it again gives the same bytes.
 - Files from version 1 of the format (`"schema": 1`, with a `reset` list), and files with the older `defaults` and `scope` fields
   instead of `overrides`, are not read. Re-export them: save the asset, or run the commandlet with `-export`.
 
-Applying a value also updates child Blueprints, data assets of a Blueprint class, and placed instances that inherited the old value,
-the same way the Details panel does. Instances that override the value keep their override.
-
-### Widget Blueprints
-
-For a Widget Blueprint, the values set in the Designer are stored in `overrides.widgets`, keyed by widget name. Each widget is
-diffed against the defaults of its widget class. The layout of a widget in its parent panel (anchors, offsets, padding, alignment,
-Z order and so on) is its slot, stored under `"<Widget>.Slot"`:
-
-```json
-    "widgets": {
-      "Title": { "RenderOpacity": "0.500000", "Text": "NSLOCTEXT(\"...\", \"...\", \"Hello\")" },
-      "Title.Slot": { "ZOrder": "3" }
-    }
-```
-
-- Keys in the JSON Sync tab are `Title.RenderOpacity` for a widget and `Title.Slot.ZOrder` for its slot.
-- Text values keep their localization key, in Unreal's text format.
-- The section is written only when a Blueprint has widgets with values set, so other Blueprints' files do not have it.
-- Values set on the Widget Blueprint's own class defaults (Class Defaults in the graph editor) still go in `self`.
-- Only existing widgets are updated. Adding, removing, renaming or re-parenting widgets is not synced: a file that names a widget
-  the Blueprint does not have is an error, and nothing in it is applied.
-
-### Data assets
-
-Any asset whose class derives from `UDataAsset` (including `UPrimaryDataAsset` and Blueprint subclasses of either) is synced. Its
-properties are diffed against its class's defaults. Only properties editable on the asset are stored.
+Applying a value does not change other assets: data assets have no children.
 
 ## Syncing in the editor
 
@@ -162,17 +131,31 @@ properties are diffed against its class's defaults. Only properties editable on 
 
 | Event | What happens |
 |---|---|
-| Editor start (asset registry loaded) | Assets whose JSON file or `.uasset` changed since the last sync are compared with their JSON. Two Way assets whose JSON changed keys without conflicts are applied. The rest are listed, and a notification offers **Review** (opens the JSON Sync tab) or **Later**. |
-| Asset saved | Its JSON file is written. **Exception:** if the JSON has changes that are not reviewed yet, the file is left alone and a notification says so. The asset stays in the JSON Sync tab until you apply it there. A JSON that is only out of date (it has no changes of its own) is written as usual. |
-| Asset renamed | The JSON file moves with it. |
-| Asset deleted | The JSON file is deleted. |
+| Editor start (asset registry loaded) | Data assets whose JSON file or `.uasset` changed since the last sync are compared with their JSON. In Automatic mode, JSON changes without conflicts are applied and saved. The rest are listed, and a notification offers **Review** (opens the JSON Sync tab) or **Later**. Missing pairs are reported (see below). |
+| Data asset saved | Its JSON file is written. **Exception:** if the JSON has changes that are not reviewed yet, the file is left alone and a notification says so. The asset stays in the JSON Sync tab until you apply it there. A JSON that is only out of date (the asset changed, the JSON did not) is written as usual. |
+| Data asset renamed | The JSON file moves with it. |
+| Data asset deleted | The JSON file is deleted. |
 
 The console command `JsonBlueprintSync.Sync` reruns the start-up check, e.g. after a `git pull` with the editor open. Nothing is
 checked during Play In Editor; a notification says so.
 
+### Missing pairs
+
+The start-up check (and `JsonBlueprintSync.Sync`) also looks for:
+
+- **a JSON file without its data asset**: the asset does not exist, or is not a data asset (e.g. a file left from an older version
+  of the plugin that synced Blueprints). Delete the file if the asset was deleted on purpose, or restore the asset.
+- **a data asset without its JSON file**, e.g. one added while the plugin was off, or before it was installed. Save the asset, or
+  run the commandlet with `-export` once. To leave a folder out on purpose, add it to **Excluded Folders**.
+
+Each one is logged as a warning with its fix, and one notification gives the counts. Nothing is changed.
+
+### Notifications
+
 Problems are shown as notifications, not only in the Output Log (category `LogJsonBlueprintSync`):
 
-- JSON files that could not be checked: unreadable, no asset for them, or the asset cannot be loaded. One notification per check.
+- JSON files that could not be checked: unreadable, or the asset cannot be loaded. One notification per check.
+- Missing pairs (see above).
 - `Saved/JsonBlueprintSync/cache.json` cannot be read (at start-up) or written (once, until a write works again).
 - A JSON file cannot be written, or cannot be deleted when its asset is renamed or deleted.
 - An asset is renamed but its JSON cannot be read, so the file is not moved.
@@ -183,29 +166,30 @@ Problems are shown as notifications, not only in the Output Log (category `LogJs
 
 Open it from **Window > JSON Sync**, with **Review** on a notification, or by clicking the JSON Sync entry in the status bar at the
 bottom of the editor, just left of the unsaved assets. That entry reads **All JSON Synced**, or **N JSON to Review** (in yellow) while
-assets are listed; its tooltip names them. The top list shows the assets whose JSON differs, with a
-status:
+assets are listed; its tooltip names them. The top list shows the assets whose JSON differs, with a status:
 
-- **N keys**: the JSON changed keys. Two Way assets in this state are applied at start-up and rarely stay listed.
+- **N keys**: the JSON changed keys. In Automatic mode these are applied at start-up and rarely stay listed.
 - **N keys, conflicts**: some keys are conflicts (see below).
-- **N keys, JSON out of date**: the asset changed and the JSON did not, e.g. a teammate committed the `.uasset` without its JSON.
-  Save the asset, or press **Apply**: every key keeps the asset's value by default.
-- **N keys, parent differs**: the JSON names another parent (or data asset class) than the asset has, e.g. after a reparent. The
-  JSON's values were relative to the old parent. Usually **All from Asset**, then **Apply**, is right.
-- **Cannot read the JSON**: the only action is **Overwrite JSON**, which writes the asset's values to the file. Or fix the file and
+- **N keys, asset changed**: the asset changed and the JSON did not, e.g. a teammate committed the `.uasset` without its JSON, or it
+  was saved while the plugin was off. The JSON is the source of truth, so this is never fixed automatically. Choose one:
+  - **Write JSON** keeps the asset's values: it writes them to the JSON file. Saving the asset does the same.
+  - **Apply JSON** reverts the asset to the JSON: every listed key gets its JSON value, as one undo step. The asset is not saved.
+- **N keys, class differs**: the JSON names another class than the asset has. The JSON's values were relative to the other
+  class's defaults. Usually **All from Asset**, then **Apply**, is right.
+- **Cannot read the JSON**: the only action is **Write JSON**, which writes the asset's values to the file. Or fix the file and
   press **Refresh**.
 
 Select an asset to see the keys that differ, as in a merge tool: the JSON value, the asset value, which side changed each key,
-and which value the key will use (**Use**: JSON in blue, Asset in green, Choose in orange). The used value is highlighted; the other one is dimmed. Selected rows are highlighted
-only while several are selected (for the right-click below).
+and which value the key will use (**Use**: JSON in blue, Asset in green, Choose in orange). The used value is highlighted; the other
+one is dimmed. Selected rows are highlighted only while several are selected (for the right-click below).
 
 | Changed in | Meaning | Uses by default |
 |---|---|---|
 | **JSON** | Only the file changed. | JSON |
-| **Asset** | Only the asset changed (e.g. you edited it but have not saved yet, or its `.uasset` was committed without the JSON). | Asset |
+| **Asset** | Only the asset changed (e.g. you edited it but have not saved yet). | Asset |
 | **Conflict** (orange) | Both sides changed, or there is no record of what the asset was before, so the plugin cannot tell. | nothing: **Choose** |
 
-`(default)` means the key is not set on that side, so it has the archetype's value.
+`(default)` means the key is not set on that side, so it has the class default.
 
 To choose the value a key uses:
 
@@ -239,41 +223,26 @@ When a difference is found, the plugin works out the **base**: the values both s
 asset change if the file has the base value, and a conflict otherwise.
 
 - Only the JSON changed: the base is the asset as it is now, so every differing key is a JSON change.
-- Only the `.uasset` changed: the base is the JSON file, so every differing key is an asset change (**JSON out of date**).
+- Only the `.uasset` changed: the base is the JSON file, so every differing key is an asset change (**asset changed**).
 
 There is no base, so every differing key shows as **Conflict**, when:
 
 - both the JSON and the `.uasset` changed since the last sync, or
 - the asset had unsaved changes when the file changed, or
-- the JSON changed and names another parent than the asset has, or
+- the JSON changed and names another class than the asset has, or
 - the plugin has never synced the asset before, or
 - the asset was saved while its JSON had unreviewed changes (unless you had just applied it: see Apply above).
 
-**Changes to a parent.** A JSON file lists only what its asset overrides, so editing a parent Blueprint (or the C++ class)
-normally leaves the children's JSON correct. The values a child does not set follow the parent and are not in the child's file;
-the values it sets are kept. This holds at every depth (children, grandchildren, data assets of the class). Saving the parent
-writes only the parent's JSON.
+**Changes to the class.** A JSON file lists only what its asset overrides, so changing a class default (in C++ or in the data
+asset's Blueprint class) leaves the JSON correct: the values the asset does not set follow the class. Its JSON goes out of date
+without its `.uasset` changing only when:
 
-For most values, Unreal copies the parent's new value into the children in memory without marking them as unsaved. A component's
-transform (location, rotation, scale) and some collision settings are the exception: Unreal then marks each child whose copy of
-the component had the parent's old value as unsaved, and the levels with placed instances too, so that one Ctrl+Z reverts them all.
-Saving those children is harmless: it rewrites their JSON, normally unchanged, since a value equal to the parent's is not an
-override.
+- the class default now equals the value the asset overrides. The key is no longer an override, but the file lists it until the
+  asset is saved. Applying it changes nothing.
+- the class removes or renames a property that the asset overrides. The file names a key that no longer exists, so applying it
+  reports an error and applies nothing in that file.
 
-A child's JSON goes out of date without its `.uasset` changing only when:
-
-- the parent now has the value the child overrides. The key is no longer an override, but the child's file lists it until the
-  child is saved. Applying it changes nothing.
-- the parent removes or renames a variable or component that the child overrides. The child's file names a key that no longer
-  exists, so applying it reports an error and applies nothing in that file.
-
-Nothing detects these, because the child's `.uasset` does not change. Saving the child fixes its file; `-verify` reports them.
-
-Structs that the child changes in part are not affected. The child's file lists only the fields the child sets, so a parent change
-to another field is inherited, as it is in the `.uasset`. Unreal saves colours, vectors and rotators whole, and the file lists them
-whole too, so the child keeps its whole value in both. Only the open editor differs: the Details panel copies the parent's edited
-field into the child, which shows it until the editor restarts (saving the child keeps it). See
-[manual test 7.3](Docs/ManualTests.md#7-propagation-and-inherited-components).
+Nothing detects these, because the `.uasset` does not change. Saving the asset fixes its file; `-verify` reports them.
 
 ### Local state
 
@@ -281,10 +250,6 @@ Sync state is kept in `Saved/JsonBlueprintSync/`, which is local and should not 
 hash of the JSON and the package's saved hash as of the last sync, and whether the asset is waiting for review. An asset whose two
 hashes both match is skipped without loading it; the package hash comes from the asset registry. Deleting the folder is safe: on the
 next start every file is compared again, without a base.
-
-Applying a file in the editor does not compile the Blueprint, because compiling would break undo. The values survive the next
-compile, just like Details-panel edits. For Widget Blueprints, the Designer shows the new values straight away. A running game
-uses the compiled widget tree, which Play In Editor brings up to date by compiling modified Blueprints first.
 
 ## Settings
 
@@ -295,13 +260,13 @@ them:
 [/Script/JsonBlueprintSync.JsonBlueprintSyncSettings]
 ; Folder for the JSON files, relative to the project folder.
 JsonDir=JsonBlueprintSync
-; None, WriteJsonOnly or TwoWay. TwoWay is treated as WriteJsonOnly for Blueprints and Widget Blueprints.
-Blueprints=WriteJsonOnly
-WidgetBlueprints=WriteJsonOnly
-DataAssets=TwoWay
+; Automatic or Manual.
+Mode=Automatic
+; Content folders whose data assets are not synced at all: no JSON is written, read or checked for them.
++ExcludedFolders=(Path="/Game/ThirdParty")
 ```
 
-Set every mode to None to turn the plugin off without disabling it.
+To turn the plugin off, disable it.
 
 ## Commandlet
 
@@ -311,14 +276,12 @@ For command-line use and CI:
 UnrealEditor-Cmd.exe <Project>.uproject -run=JsonBlueprintSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]
 ```
 
-- `-export` writes JSON for every synced asset under `-dir` (default `/Game`).
-- `-import` applies every JSON file under `-dir`, compiles the changed Blueprints, and saves them plus any child Blueprints and data
-  assets the values reached. It applies the whole file, whatever the mode, except for assets whose mode is None. `-nosave` skips
-  saving.
-- `-verify` exits with an error if any JSON file differs from its asset, is missing, or has no asset. Use it in CI to catch assets
-  that were changed without re-exporting.
+- `-export` writes JSON for every synced data asset under `-dir` (default `/Game`), and warns about JSON files without their asset.
+- `-import` applies every JSON file under `-dir` and saves the data assets it changed, whatever the mode. `-nosave` skips saving.
+- `-verify` exits with an error if any JSON file differs from its data asset, is missing, or has no asset. Use it in CI to catch
+  assets that were changed without their JSON.
 - `-jsondir` overrides the `JsonDir` setting.
-- Assets whose mode is None are skipped.
+- Data assets in excluded folders are skipped.
 
 In Git Bash, set `MSYS_NO_PATHCONV=1` so `/Game/...` arguments are not turned into Windows paths.
 
@@ -332,29 +295,27 @@ The JSON files give a readable diff of the values a change sets. For the `.uasse
 - **Merge**: merging two versions of an asset through that text, and applying the result in the editor, is the separate editor
   plugin **UAssPainMerger** (https://github.com/yeahBash/UAssPainMerger).
 
-This plugin doesn't need either of them.
+This plugin doesn't need either of them. For a data asset, merging its JSON file is usually enough: the editor applies the merged
+JSON.
 
 ## Limitations
 
-- Only default values are stored. Graph logic, functions and variables themselves are not. For Widget Blueprints, the widget
-  hierarchy, animations and property bindings are not stored either.
-- Only assets under `/Game` are synced, not plugin content. Only a package's main asset is synced.
+- Only data assets are synced, and only a package's main asset.
 - Only properties visible in the Details panel (`CPF_Edit`) are stored. Transient, deprecated, read-only (`EditConst`) and
-  instance-only properties are skipped, as are fixed-size C-style arrays. For data assets, properties that can only be edited on
-  the class defaults are skipped.
-- Instanced sub-objects (properties marked `Instanced` and their contents) are skipped.
-- Components created in C++ with `CreateDefaultSubobject` are captured but have not been tested yet.
+  class-only (`EditDefaultsOnly`) properties are skipped, as are fixed-size C-style arrays.
+- **Instanced sub-objects** (properties marked `Instanced` and their contents) are skipped: they stay in the `.uasset` only. Their
+  changes are not in the JSON, and a JSON apply leaves them as they are.
 
 ## Tests
 
 Automation tests are under `JsonBlueprintSync.*`:
 
 ```
-UnrealEditor-Cmd.exe <Project>.uproject -ExecCmds="Automation RunTests JsonBlueprintSync;Quit" -unattended -nullrhi -nosplash
+UnrealEditor-Cmd.exe <Project>.uproject -ExecCmds="Automation RunTests JsonBlueprintSync" -TestExit="Automation Test Queue Empty" -unattended -nullrhi -nosplash
 ```
 
-They cover the library and the subsystem's decision rules (which base to use, when Two Way applies on its own), not the editor
-subsystem itself, the JSON Sync tab or the commandlet. [Docs/ManualTests.md](Docs/ManualTests.md)
+They cover the library and the subsystem's decision rules (which base to use, when Automatic mode applies on its own, missing
+pairs), not the editor subsystem itself, the JSON Sync tab or the commandlet. [Docs/ManualTests.md](Docs/ManualTests.md)
 is a step-by-step checklist for those.
 
 ## How it works

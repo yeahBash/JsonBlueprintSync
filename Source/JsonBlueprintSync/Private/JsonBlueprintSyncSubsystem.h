@@ -16,11 +16,11 @@ class FObjectPostSaveContext;
 struct FAssetData;
 
 /**
- * Keeps the JSON files in sync with the assets while the editor runs (see the plugin README.md):
- * - Saving an asset writes its JSON, unless the JSON has changes that are not reviewed yet (then the asset is "pending").
+ * Keeps the JSON files in sync with the data assets while the editor runs (see the plugin README.md):
+ * - Saving a data asset writes its JSON, unless the JSON has changes that are not reviewed yet (then the asset is "pending").
  * - When the asset registry has finished loading, finds JSON files that changed since the last sync and differ from their asset.
- *   They are listed in the JSON Sync tab. Data assets in Two Way mode get the JSON applied automatically when nothing conflicts;
- *   that apply cannot be undone, saves the asset, and is skipped for an asset that the undo history holds.
+ *   They are listed in the JSON Sync tab. In Automatic mode the JSON is applied when nothing conflicts; that apply cannot be
+ *   undone, saves the asset, and is skipped for an asset that has unsaved edits or that the undo history holds.
  * - Moves the JSON file when an asset is renamed and deletes it when the asset is deleted.
  * - Undoing an Apply JSON from the tab puts the asset back in the JSON Sync tab; a JSON that changes again after it was reviewed is
  *   not overwritten.
@@ -38,16 +38,15 @@ public:
 	struct FPendingView
 	{
 		FString PackageName;
-		JsonBlueprintSync::EAssetKind Kind = JsonBlueprintSync::EAssetKind::None;
-		/** Set if the JSON cannot be read or the asset cannot be loaded; then only Overwrite JSON is possible. */
+		/** Set if the JSON cannot be read or the asset cannot be loaded; then only Write JSON (OverwriteJson) is possible. */
 		FString Error;
 		/** Keys that differ between the JSON and the asset now. */
 		TArray<JsonBlueprintSync::FKeyDiff> Keys;
 		/** False if it is unknown which side changed what (every key is then a conflict). */
 		bool bHasBase = false;
 		/**
-		 * Set if the JSON names a different parent (Blueprints) or class (data assets) than the asset has, e.g. after a reparent.
-		 * The JSON's values are then relative to another archetype, so nothing is applied automatically.
+		 * Set if the JSON names a different class than the asset has, e.g. after the asset was recreated with another class.
+		 * The JSON's values are then relative to other class defaults, so nothing is applied automatically.
 		 */
 		FString JsonParent;
 		FString AssetParent;
@@ -62,12 +61,12 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
-	// FEditorUndoClient: undoing an Apply JSON makes the asset pending again; redoing it resolves it again.
+	// FEditorUndoClient: undoing an apply from the JSON Sync tab makes the asset pending again; redoing it resolves it again.
 	virtual bool MatchesContext(const FTransactionContext& InContext, const TArray<TPair<UObject*, FTransactionObjectEvent>>& TransactionObjectContexts) const override;
 	virtual void PostUndo(bool bSuccess) override;
 	virtual void PostRedo(bool bSuccess) override;
 
-	/** Finds JSON files that changed since the last sync and differ from their asset; applies Two Way ones that do not conflict. */
+	/** Finds JSON files that changed since the last sync and differ from their asset; in Automatic mode applies those that do not conflict. */
 	void SyncFromJson();
 
 	/** Pending package names, sorted. */
@@ -112,7 +111,6 @@ public:
 private:
 	struct FPending
 	{
-		JsonBlueprintSync::EAssetKind Kind = JsonBlueprintSync::EAssetKind::None;
 		/** Unset if the file cannot be parsed. */
 		TOptional<JsonBlueprintSync::FAssetDefaults> File;
 		FString Error;
@@ -122,17 +120,16 @@ private:
 		FString FileHash;
 	};
 
-	/** An asset whose pending state was resolved (Apply JSON, Two Way, Overwrite JSON) but that has not been saved since. */
+	/** An asset whose pending state was resolved (an apply, manual or automatic, or Write JSON) but that has not been saved since. */
 	struct FResolved
 	{
-		JsonBlueprintSync::EAssetKind Kind = JsonBlueprintSync::EAssetKind::None;
 		/** Hash of the JSON as reviewed. If the file has another hash at the next save or sync, it changed after the review. */
 		FString FileHash;
 		/** The JSON as reviewed: the base if the file changes again before the save. Unset if unknown. */
 		TOptional<JsonBlueprintSync::FAssetDefaults> ReviewedFile;
-		/** The pending state before Apply JSON, restored if the apply is undone. Unset for Overwrite JSON. */
+		/** The pending state before the apply, restored if the apply is undone. Unset for Write JSON. */
 		TOptional<FPending> Before;
-		/** The Apply JSON transaction that changed this asset. Invalid if it changed nothing in this asset, and for Overwrite JSON. */
+		/** The apply transaction that changed this asset. Invalid if it changed nothing in this asset, for an automatic apply and for Write JSON. */
 		FGuid TransactionId;
 	};
 
@@ -140,15 +137,15 @@ private:
 	 * Compares a JSON file with its asset and records it as matching or pending. Returns true if it became pending.
 	 * bAssetChanged: the package's saved hash differs from the one recorded at the last sync.
 	 */
-	bool Detect(const FString& PackageName, const FString& Text, const FString& FileHash, JsonBlueprintSync::EAssetKind Kind, bool bAssetChanged,
+	bool Detect(const FString& PackageName, const FString& Text, const FString& FileHash, bool bAssetChanged,
 		TArray<FString>& OutErrors);
 
 	/** Whether the JSON file on disk is the one recorded at the last sync, i.e. it has no changes of its own. */
 	bool IsJsonUnchanged(const FString& PackageName) const;
 
 	/**
-	 * Applies the keys to each asset (Blueprints first, parents before children). Returns the resolved packages.
-	 * bAutomatic: a Two Way apply, which is not recorded for undo, so that Ctrl+Z cannot revert a JSON change that came from
+	 * Applies the keys to each asset. Returns the resolved packages.
+	 * bAutomatic: an Automatic mode apply, which is not recorded for undo, so that Ctrl+Z cannot revert a JSON change that came from
 	 * elsewhere, and which saves the changed assets. Otherwise the whole batch is one transaction and nothing is saved. Callers of
 	 * an automatic apply must check IsInUndoHistory first.
 	 */
@@ -160,7 +157,7 @@ private:
 	 */
 	static bool IsInUndoHistory(const FString& PackageName);
 
-	/** Clears the pending state after the user (or Two Way) picked the values. TransactionId: the apply's, if it changed the asset. */
+	/** Clears the pending state after the user (or Automatic mode) picked the values. TransactionId: the apply's, if it changed the asset. */
 	void Resolve(const FString& PackageName, UObject* Asset, const FGuid& TransactionId);
 
 	/**
@@ -176,10 +173,8 @@ private:
 	void MarkPending(const FString& PackageName, FPending&& State);
 	void ShowPendingNotification();
 	void NotifySaveSkipped(const FString& PackageName, bool bChangedAfterReview = false);
-
-	/** The synced kind of the asset, or None if its kind is not synced or its mode is None. */
-	JsonBlueprintSync::EAssetKind GetSyncedKind(const FAssetData& Asset) const;
-	JsonBlueprintSync::EAssetKind GetSyncedKind(const UObject* Asset) const;
+	/** Logs JSON files without their data asset and data assets without their JSON, and shows one notification. */
+	void ReportMissingPairs();
 
 	void OnFilesLoaded();
 	void OnPackageSaved(const FString& PackageFileName, UPackage* Package, FObjectPostSaveContext Context);

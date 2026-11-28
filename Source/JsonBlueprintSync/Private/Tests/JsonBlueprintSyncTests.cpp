@@ -5,30 +5,17 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "AssetRegistry/AssetData.h"
-#include "Blueprint/UserWidget.h"
-#include "Blueprint/WidgetBlueprintGeneratedClass.h"
-#include "Blueprint/WidgetTree.h"
-#include "Components/CanvasPanel.h"
-#include "Components/CanvasPanelSlot.h"
-#include "Components/PointLightComponent.h"
-#include "Components/TextBlock.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "Engine/DataAsset.h"
-#include "Engine/Engine.h"
-#include "Engine/InheritableComponentHandler.h"
-#include "Engine/SCS_Node.h"
-#include "Engine/SimpleConstructionScript.h"
-#include "Engine/World.h"
-#include "GameFramework/Actor.h"
 #include "HAL/FileManager.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "UObject/Package.h"
-#include "WidgetBlueprint.h"
 
 namespace JsonBlueprintSync::Tests
 {
@@ -47,69 +34,52 @@ namespace JsonBlueprintSync::Tests
 	}
 
 	/**
-	 * Parent Blueprint (Actor) with variables FlickerSpeed (double), Tint (LinearColor), Steps (int array) and a point light
-	 * component "Light", plus a child Blueprint of it. Both live in transient /Temp packages.
+	 * A Blueprint subclass of UPrimaryDataAsset with the instance-editable variables FlickerSpeed (double), Tint (LinearColor) and
+	 * Steps (int array) and the class-only Hidden (double), plus one data asset of it. Both live in transient /Temp packages.
 	 */
-	struct FTestBlueprints
+	struct FTestData
 	{
-		UBlueprint* Parent = nullptr;
-		UBlueprint* Child = nullptr;
+		UBlueprint* ClassBlueprint = nullptr;
+		UDataAsset* Asset = nullptr;
 
-		FTestBlueprints()
+		/** DefaultSpeed: the class default of FlickerSpeed, which a key missing from the JSON resets to. */
+		explicit FTestData(double DefaultSpeed = 0.0)
 		{
 			const FString Suffix = FGuid::NewGuid().ToString(EGuidFormats::Digits);
-			Parent = Create(AActor::StaticClass(), TEXT("BP_Parent_") + Suffix);
+			const FString ClassName = TEXT("BP_Data_") + Suffix;
+			ClassBlueprint = FKismetEditorUtilities::CreateBlueprint(UPrimaryDataAsset::StaticClass(), CreateTestPackage(ClassName), FName(*ClassName),
+				BPTYPE_Normal);
 
-			FEdGraphPinType ColorType(UEdGraphSchema_K2::PC_Struct, NAME_None, TBaseStructure<FLinearColor>::Get(), EPinContainerType::None, false, FEdGraphTerminalType());
-			FEdGraphPinType IntArrayType(UEdGraphSchema_K2::PC_Int, NAME_None, nullptr, EPinContainerType::Array, false, FEdGraphTerminalType());
-			FBlueprintEditorUtils::AddMemberVariable(Parent, TEXT("FlickerSpeed"), DoubleType());
-			FBlueprintEditorUtils::AddMemberVariable(Parent, TEXT("Tint"), ColorType);
-			FBlueprintEditorUtils::AddMemberVariable(Parent, TEXT("Steps"), IntArrayType);
-			// Instance-editable, so placed instances can override it. Non-instance-editable variables are reset from the CDO
-			// whenever the construction script reruns (AActor::ResetPropertiesForConstruction).
-			FBlueprintEditorUtils::SetBlueprintOnlyEditableFlag(Parent, TEXT("FlickerSpeed"), false);
+			const FEdGraphPinType ColorType(UEdGraphSchema_K2::PC_Struct, NAME_None, TBaseStructure<FLinearColor>::Get(), EPinContainerType::None, false,
+				FEdGraphTerminalType());
+			const FEdGraphPinType IntArrayType(UEdGraphSchema_K2::PC_Int, NAME_None, nullptr, EPinContainerType::Array, false, FEdGraphTerminalType());
+			FBlueprintEditorUtils::AddMemberVariable(ClassBlueprint, TEXT("FlickerSpeed"), DoubleType());
+			FBlueprintEditorUtils::AddMemberVariable(ClassBlueprint, TEXT("Tint"), ColorType);
+			FBlueprintEditorUtils::AddMemberVariable(ClassBlueprint, TEXT("Steps"), IntArrayType);
+			FBlueprintEditorUtils::AddMemberVariable(ClassBlueprint, TEXT("Hidden"), DoubleType());
+			// New variables are class-only (not editable on an asset); a data asset can only set the instance-editable ones.
+			for (const TCHAR* Name : { TEXT("FlickerSpeed"), TEXT("Tint"), TEXT("Steps") })
+			{
+				FBlueprintEditorUtils::SetBlueprintOnlyEditableFlag(ClassBlueprint, Name, false);
+			}
+			FKismetEditorUtilities::CompileBlueprint(ClassBlueprint, EBlueprintCompileOptions::SkipGarbageCollection);
+			SetDouble(GetClassDefault(), TEXT("FlickerSpeed"), DefaultSpeed);
 
-			USCS_Node* Light = Parent->SimpleConstructionScript->CreateNode(UPointLightComponent::StaticClass(), TEXT("Light"));
-			Parent->SimpleConstructionScript->AddNode(Light);
-			FKismetEditorUtilities::CompileBlueprint(Parent, EBlueprintCompileOptions::SkipGarbageCollection);
-
-			Child = Create(Parent->GeneratedClass, TEXT("BP_Child_") + Suffix);
+			const FString Name = TEXT("DA_Test_") + Suffix;
+			Asset = NewObject<UDataAsset>(CreateTestPackage(Name), ClassBlueprint->GeneratedClass, FName(*Name), RF_Public | RF_Standalone | RF_Transactional);
 		}
 
-		static UBlueprint* Create(UClass* ParentClass, const FString& Name)
+		UObject* GetClassDefault() const
 		{
-			return FKismetEditorUtilities::CreateBlueprint(ParentClass, CreateTestPackage(Name), FName(*Name), BPTYPE_Normal);
-		}
-	};
-
-	/** Editor world for spawning instances; destroyed with the scope. */
-	struct FTestWorld
-	{
-		UWorld* World = nullptr;
-
-		FTestWorld()
-		{
-			World = UWorld::CreateWorld(EWorldType::Editor, false);
-			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Editor);
-			Context.SetCurrentWorld(World);
-		}
-		~FTestWorld()
-		{
-			GEngine->DestroyWorldContext(World);
-			World->DestroyWorld(false);
+			return ClassBlueprint->GeneratedClass->GetDefaultObject();
 		}
 
-		AActor* Spawn(UBlueprint* Blueprint, const TCHAR* Name) const
+		static void SetDouble(UObject* Object, const TCHAR* Name, double Value)
 		{
-			FActorSpawnParameters Params;
-			Params.Name = Name;
-			return World->SpawnActor<AActor>(Blueprint->GeneratedClass, Params);
-		}
-
-		/** Compiling reinstances actors; find the current one by name. */
-		AActor* Find(const TCHAR* Name) const
-		{
-			return FindObject<AActor>(World->PersistentLevel, Name);
+			if (const FDoubleProperty* Property = FindFProperty<FDoubleProperty>(Object->GetClass(), Name))
+			{
+				Property->SetPropertyValue_InContainer(Object, Value);
+			}
 		}
 	};
 
@@ -126,14 +96,6 @@ namespace JsonBlueprintSync::Tests
 		return Property ? Property->GetPropertyValue_InContainer(Object) : -1.0;
 	}
 
-	void SetDouble(UObject* Object, const TCHAR* Name, double Value)
-	{
-		if (const FDoubleProperty* Property = FindFProperty<FDoubleProperty>(Object->GetClass(), Name))
-		{
-			Property->SetPropertyValue_InContainer(Object, Value);
-		}
-	}
-
 	FLinearColor GetTint(const UObject* Object)
 	{
 		const FStructProperty* Property = FindFProperty<FStructProperty>(Object->GetClass(), TEXT("Tint"));
@@ -146,18 +108,6 @@ namespace JsonBlueprintSync::Tests
 		{
 			*Property->ContainerPtrToValuePtr<FLinearColor>(Object) = Value;
 		}
-	}
-
-	UPointLightComponent* GetTemplateLight(UBlueprint* Blueprint)
-	{
-		for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
-		{
-			if (Node->GetVariableName() == TEXT("Light"))
-			{
-				return Cast<UPointLightComponent>(Node->ComponentTemplate);
-			}
-		}
-		return nullptr;
 	}
 
 	bool ReportErrors(FAutomationTestBase& Test, const FApplyResult& Result)
@@ -184,6 +134,14 @@ namespace JsonBlueprintSync::Tests
 		return FString::Join(Keys, TEXT(","));
 	}
 
+	FString JoinCapturedKeys(UObject* Asset)
+	{
+		TArray<FString> Keys;
+		Flatten(Capture(Asset)).GetKeys(Keys);
+		Keys.Sort();
+		return FString::Join(Keys, TEXT(","));
+	}
+
 	const FKeyDiff* FindDiff(const TArray<FKeyDiff>& Diffs, const TCHAR* Key)
 	{
 		return Diffs.FindByPredicate([Key](const FKeyDiff& Diff) { return Diff.Key == Key; });
@@ -197,12 +155,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncFormatTest, "JsonBlueprintSyn
 bool FJsonBlueprintSyncFormatTest::RunTest(const FString&)
 {
 	FAssetDefaults Doc;
-	Doc.Asset = TEXT("/Game/A/BP_B");
-	Doc.Parent = TEXT("/Script/Engine.Actor");
+	Doc.Asset = TEXT("/Game/A/DA_B");
+	Doc.Parent = TEXT("/Script/Engine.PrimaryDataAsset");
 	Doc.Self.Add(TEXT("b"), TEXT("Quote \" back \\ tab \t"));
 	Doc.Self.Add(TEXT("Z"), TEXT("(1,2)"));
 	Doc.Self.Add(TEXT("a"), TEXT("1.0"));
-	Doc.Components.Add(TEXT("Light")).Add(TEXT("Intensity"), TEXT("5000.0"));
 
 	const FString Json = ToJson(Doc);
 	TestFalse(TEXT("No CR"), Json.Contains(TEXT("\r")));
@@ -212,7 +169,7 @@ bool FJsonBlueprintSyncFormatTest::RunTest(const FString&)
 	{
 		// Field names with their colon, so that a value cannot match.
 		TArray<int32> Positions;
-		for (const TCHAR* Field : { TEXT("\"schema\":"), TEXT("\"asset\":"), TEXT("\"parent\":"), TEXT("\"overrides\":"), TEXT("\"self\":"), TEXT("\"components\":") })
+		for (const TCHAR* Field : { TEXT("\"schema\":"), TEXT("\"asset\":"), TEXT("\"parent\":"), TEXT("\"overrides\":"), TEXT("\"self\":") })
 		{
 			Positions.Add(Json.Find(Field, ESearchCase::CaseSensitive));
 		}
@@ -223,9 +180,7 @@ bool FJsonBlueprintSyncFormatTest::RunTest(const FString&)
 		}
 		TestTrue(TEXT("Fixed field order"), bOrdered);
 	}
-	TestFalse(TEXT("No reset field"), Json.Contains(TEXT("\"reset\"")));
-	TestFalse(TEXT("No scope field"), Json.Contains(TEXT("\"scope\"")));
-	TestTrue(TEXT("Components nested in overrides"), Json.Contains(TEXT("\n    \"components\": {\n      \"Light\": {\n        \"Intensity\": \"5000.0\"\n      }\n    }\n  }\n}\n")));
+	TestTrue(TEXT("Self is the only section"), Json.EndsWith(TEXT("\n      \"b\": \"Quote \\\" back \\\\ tab \\t\"\n    }\n  }\n}\n")));
 
 	FAssetDefaults Parsed;
 	FString Error;
@@ -235,8 +190,6 @@ bool FJsonBlueprintSyncFormatTest::RunTest(const FString&)
 
 	const FString Empty = ToJson(FAssetDefaults());
 	TestTrue(TEXT("Empty self"), Empty.Contains(TEXT("\"overrides\": {\n    \"self\": {}\n  }")));
-	TestFalse(TEXT("No components section without components"), Empty.Contains(TEXT("\"components\"")));
-	TestFalse(TEXT("No widgets section without widgets"), Empty.Contains(TEXT("\"widgets\"")));
 
 	auto Rejects = [this](const TCHAR* What, const FString& Text, const TCHAR* ExpectedMessage = nullptr)
 	{
@@ -255,27 +208,28 @@ bool FJsonBlueprintSyncFormatTest::RunTest(const FString&)
 	Rejects(TEXT("Old layout"), TEXT("{\"schema\": 2, \"scope\": \"defaults\", \"asset\": \"/Game/X\", \"defaults\": {}}"), TEXT("unknown field 'scope'"));
 	Rejects(TEXT("Missing asset"), TEXT("{\"schema\": 2, \"overrides\": {}}"));
 	Rejects(TEXT("Reset is no longer a field"), TEXT("{\"schema\": 2, \"asset\": \"/Game/X\", \"reset\": []}"));
-	Rejects(TEXT("Components at the top level"), TEXT("{\"schema\": 2, \"asset\": \"/Game/X\", \"components\": {}}"), TEXT("unknown field 'components'"));
 	Rejects(TEXT("Unknown field in overrides"), TEXT("{\"schema\": 2, \"asset\": \"/Game/X\", \"overrides\": {\"defaults\": {}}}"), TEXT("unknown field 'overrides.defaults'"));
+	// Blueprint files of older plugin versions: components and widgets are no longer synced.
+	Rejects(TEXT("Components"), TEXT("{\"schema\": 2, \"asset\": \"/Game/X\", \"overrides\": {\"components\": {}}}"), TEXT("unknown field 'overrides.components'"));
+	Rejects(TEXT("Widgets"), TEXT("{\"schema\": 2, \"asset\": \"/Game/X\", \"overrides\": {\"widgets\": {}}}"), TEXT("unknown field 'overrides.widgets'"));
 	Rejects(TEXT("Overrides not an object"), TEXT("{\"schema\": 2, \"asset\": \"/Game/X\", \"overrides\": []}"), TEXT("'overrides' must be an object"));
+	Rejects(TEXT("Self not an object"), TEXT("{\"schema\": 2, \"asset\": \"/Game/X\", \"overrides\": {\"self\": 1}}"), TEXT("'overrides.self' must be an object"));
 	Rejects(TEXT("Number value"), TEXT("{\"schema\": 2, \"asset\": \"/Game/X\", \"overrides\": {\"self\": {\"A\": 2.5}}}"), TEXT("overrides.self.A"));
-	Rejects(TEXT("Component not an object"), TEXT("{\"schema\": 2, \"asset\": \"/Game/X\", \"overrides\": {\"components\": {\"Light\": 1}}}"),
-		TEXT("overrides.components.Light must be an object"));
 	{
 		FAssetDefaults Minimal;
 		FString MinimalError;
 		TestTrue(TEXT("No overrides means nothing overridden"), FromJson(TEXT("{\"schema\": 2, \"asset\": \"/Game/X\"}"), Minimal, MinimalError)
-			&& Minimal.Self.Num() == 0 && Minimal.Components.Num() == 0);
+			&& Minimal.Self.Num() == 0);
 	}
 
 	const FString Root = TEXT("C:/Project/JsonBlueprintSync");
-	const FString Path = GetJsonPath(Root, TEXT("/Game/Features/Light/BP_Lamp"));
-	TestEqual(TEXT("JSON path"), Path, FString(TEXT("C:/Project/JsonBlueprintSync/Game/Features/Light/BP_Lamp.json")));
+	const FString Path = GetJsonPath(Root, TEXT("/Game/Features/Light/DA_Lamp"));
+	TestEqual(TEXT("JSON path"), Path, FString(TEXT("C:/Project/JsonBlueprintSync/Game/Features/Light/DA_Lamp.json")));
 	FString PackageName;
 	TestTrue(TEXT("Package name from path"), GetPackageName(Root, Path, PackageName));
-	TestEqual(TEXT("Package name"), PackageName, FString(TEXT("/Game/Features/Light/BP_Lamp")));
-	TestFalse(TEXT("Outside the root"), GetPackageName(Root, TEXT("C:/Other/Game/BP.json"), PackageName));
-	TestFalse(TEXT("Not JSON"), GetPackageName(Root, TEXT("C:/Project/JsonBlueprintSync/Game/BP.txt"), PackageName));
+	TestEqual(TEXT("Package name"), PackageName, FString(TEXT("/Game/Features/Light/DA_Lamp")));
+	TestFalse(TEXT("Outside the root"), GetPackageName(Root, TEXT("C:/Other/Game/DA.json"), PackageName));
+	TestFalse(TEXT("Not JSON"), GetPackageName(Root, TEXT("C:/Project/JsonBlueprintSync/Game/DA.txt"), PackageName));
 
 	TestEqual(TEXT("Hash ignores line endings"), HashText(TEXT("a\r\nb\n")), HashText(TEXT("a\nb\n")));
 	TestNotEqual(TEXT("Hash sees content"), HashText(TEXT("a\n")), HashText(TEXT("b\n")));
@@ -285,112 +239,60 @@ bool FJsonBlueprintSyncFormatTest::RunTest(const FString&)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncRoundTripTest, "JsonBlueprintSync.RoundTrip", TestFlags)
 bool FJsonBlueprintSyncRoundTripTest::RunTest(const FString&)
 {
-	FTestBlueprints BPs;
-	UBlueprint* BP = BPs.Parent;
-	TestTrue(TEXT("Blueprint kind"), GetAssetKind(BP) == EAssetKind::Blueprint);
-	TestTrue(TEXT("Blueprint kind from asset data"), GetAssetKind(FAssetData(BP)) == EAssetKind::Blueprint);
+	FTestData Data;
+	UDataAsset* Asset = Data.Asset;
 
-	const FAssetDefaults Initial = Capture(BP);
-	TestEqual(TEXT("New Blueprint has no overrides"), Initial.Self.Num() + Initial.Components.Num(), 0);
-	TestEqual(TEXT("Asset package"), Initial.Asset, BP->GetPackage()->GetName());
-	TestEqual(TEXT("Parent class"), Initial.Parent, AActor::StaticClass()->GetPathName());
+	const FAssetDefaults Initial = Capture(Asset);
+	TestEqual(TEXT("New data asset has no values"), Initial.Self.Num(), 0);
+	TestEqual(TEXT("Asset package"), Initial.Asset, Asset->GetPackage()->GetName());
+	TestEqual(TEXT("Parent is the asset's class"), Initial.Parent, Data.ClassBlueprint->GeneratedClass->GetPathName());
 
-	FAssetDefaults Doc = MakeDoc(BP);
+	FAssetDefaults Doc = MakeDoc(Asset);
 	Doc.Self.Add(TEXT("FlickerSpeed"), TEXT("2.5"));
 	Doc.Self.Add(TEXT("Tint"), TEXT("(R=1.0,G=0.5,B=0.25,A=1.0)"));
 	Doc.Self.Add(TEXT("Steps"), TEXT("(1,2,3)"));
-	Doc.Components.Add(TEXT("Light")).Add(TEXT("Intensity"), TEXT("1234.0"));
-	const FApplyResult Result = Import(BP, Doc);
-	TestFalse(TEXT("Import succeeded"), Result.HasErrors());
-	TestEqual(TEXT("Four values changed"), Result.Changed.Num(), 4);
+	const FApplyResult Result = Import(Asset, Doc);
+	if (!ReportErrors(*this, Result))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Three values changed"), Result.Changed.Num(), 3);
+	TestTrue(TEXT("Package marked dirty"), Asset->GetPackage()->IsDirty());
 
-	UObject* CDO = BP->GeneratedClass->GetDefaultObject();
-	TestEqual(TEXT("FlickerSpeed"), GetDouble(CDO, TEXT("FlickerSpeed")), 2.5);
-	TestEqual(TEXT("Tint"), GetTint(CDO), FLinearColor(1.0f, 0.5f, 0.25f, 1.0f));
-	UPointLightComponent* Light = GetTemplateLight(BP);
-	TestTrue(TEXT("Light template intensity"), Light && FMath::IsNearlyEqual(Light->Intensity, 1234.0f));
+	TestEqual(TEXT("FlickerSpeed"), GetDouble(Asset, TEXT("FlickerSpeed")), 2.5);
+	TestEqual(TEXT("Tint"), GetTint(Asset), FLinearColor(1.0f, 0.5f, 0.25f, 1.0f));
+	TestEqual(TEXT("Class default untouched"), GetDouble(Data.GetClassDefault(), TEXT("FlickerSpeed")), 0.0);
 
-	const FAssetDefaults Captured = Capture(BP);
-	TestEqual(TEXT("Captured defaults"), Captured.Self.Num(), 3);
-	TestTrue(TEXT("Captured component"), Captured.Components.Contains(TEXT("Light")) && Captured.Components[TEXT("Light")].Contains(TEXT("Intensity")));
+	const FAssetDefaults Captured = Capture(Asset);
+	TestEqual(TEXT("Captured keys"), JoinCapturedKeys(Asset), FString(TEXT("FlickerSpeed,Steps,Tint")));
 
 	const FString Json = ToJson(Captured);
 	FAssetDefaults Parsed;
 	FString Error;
 	TestTrue(TEXT("Parses"), FromJson(Json, Parsed, Error));
 	TestTrue(TEXT("Values equal"), ValuesEqual(Parsed, Captured));
-	const FApplyResult Again = Import(BP, Parsed);
+	const FApplyResult Again = Import(Asset, Parsed);
 	TestFalse(TEXT("Re-import succeeded"), Again.HasErrors());
 	TestEqual(TEXT("Re-importing the export changes nothing"), Again.Changed.Num(), 0);
-	TestEqual(TEXT("Export is stable"), ToJson(Capture(BP)), Json);
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncPropagationTest, "JsonBlueprintSync.Propagation", TestFlags)
-bool FJsonBlueprintSyncPropagationTest::RunTest(const FString&)
-{
-	FTestBlueprints BPs;
-	FTestWorld World;
-
-	// The child overrides FlickerSpeed; instance B overrides it too.
-	FAssetDefaults ChildDoc = MakeDoc(BPs.Child);
-	ChildDoc.Self.Add(TEXT("FlickerSpeed"), TEXT("42.0"));
-	if (!ImportOk(*this, BPs.Child, ChildDoc))
-	{
-		return false;
-	}
-	const FString ChildJsonBefore = ToJson(Capture(BPs.Child));
-
-	World.Spawn(BPs.Parent, TEXT("InstanceA"));
-	AActor* B = World.Spawn(BPs.Parent, TEXT("InstanceB"));
-	SetDouble(B, TEXT("FlickerSpeed"), 99.0);
-
-	FAssetDefaults Doc = MakeDoc(BPs.Parent);
-	Doc.Self.Add(TEXT("FlickerSpeed"), TEXT("3.0"));
-	Doc.Self.Add(TEXT("Tint"), TEXT("(R=0.0,G=1.0,B=0.0,A=1.0)"));
-	Doc.Components.Add(TEXT("Light")).Add(TEXT("Intensity"), TEXT("777.0"));
-	if (!ImportOk(*this, BPs.Parent, Doc))
-	{
-		return false;
-	}
-	TestTrue(TEXT("Parents apply before children"), GetApplyOrder(BPs.Parent) < GetApplyOrder(BPs.Child));
-
-	UObject* ChildCDO = BPs.Child->GeneratedClass->GetDefaultObject();
-	TestEqual(TEXT("Child keeps its own FlickerSpeed"), GetDouble(ChildCDO, TEXT("FlickerSpeed")), 42.0);
-	TestEqual(TEXT("Child follows the parent's Tint"), GetTint(ChildCDO), FLinearColor(0.0f, 1.0f, 0.0f, 1.0f));
-	TestEqual(TEXT("Child JSON is unchanged by the parent import"), ToJson(Capture(BPs.Child)), ChildJsonBefore);
-
-	AActor* A = World.Find(TEXT("InstanceA"));
-	B = World.Find(TEXT("InstanceB"));
-	if (!TestNotNull(TEXT("Instance A"), A) || !TestNotNull(TEXT("Instance B"), B))
-	{
-		return false;
-	}
-	TestEqual(TEXT("Instance A follows the new default"), GetDouble(A, TEXT("FlickerSpeed")), 3.0);
-	TestEqual(TEXT("Instance B keeps its override"), GetDouble(B, TEXT("FlickerSpeed")), 99.0);
-	TestEqual(TEXT("Instance A gets the new Tint"), GetTint(A), FLinearColor(0.0f, 1.0f, 0.0f, 1.0f));
-
-	UPointLightComponent* InstanceLight = A->FindComponentByClass<UPointLightComponent>();
-	TestTrue(TEXT("Instance A's light follows the template"), InstanceLight && FMath::IsNearlyEqual(InstanceLight->Intensity, 777.0f));
+	TestEqual(TEXT("Export is stable"), ToJson(Capture(Asset)), Json);
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncRejectsBadValuesTest, "JsonBlueprintSync.RejectsBadValues", TestFlags)
 bool FJsonBlueprintSyncRejectsBadValuesTest::RunTest(const FString&)
 {
-	FTestBlueprints BPs;
-	UBlueprint* BP = BPs.Parent;
-	UObject* CDO = BP->GeneratedClass->GetDefaultObject();
+	FTestData Data;
+	UDataAsset* Asset = Data.Asset;
 
-	auto Rejects = [this, BP, CDO](const TCHAR* What, TFunctionRef<void(FAssetDefaults&)> Edit)
+	auto Rejects = [this, Asset](const TCHAR* What, TFunctionRef<void(FAssetDefaults&)> Edit)
 	{
-		FAssetDefaults Doc = MakeDoc(BP);
+		FAssetDefaults Doc = MakeDoc(Asset);
 		Doc.Self.Add(TEXT("FlickerSpeed"), TEXT("2.5"));
 		Edit(Doc);
-		const FApplyResult Result = Import(BP, Doc);
+		const FApplyResult Result = Import(Asset, Doc);
 		TestTrue(FString(What) + TEXT(": rejected"), Result.HasErrors());
 		TestEqual(FString(What) + TEXT(": nothing written"), Result.Changed.Num(), 0);
-		TestEqual(FString(What) + TEXT(": valid value not applied either"), GetDouble(CDO, TEXT("FlickerSpeed")), 0.0);
+		TestEqual(FString(What) + TEXT(": valid value not applied either"), GetDouble(Asset, TEXT("FlickerSpeed")), 0.0);
 	};
 
 	Rejects(TEXT("Unknown property"), [](FAssetDefaults& Doc) { Doc.Self.Add(TEXT("NoSuchProperty"), TEXT("1")); });
@@ -398,45 +300,50 @@ bool FJsonBlueprintSyncRejectsBadValuesTest::RunTest(const FString&)
 	Rejects(TEXT("Bad array text"), [](FAssetDefaults& Doc) { Doc.Self.Add(TEXT("Steps"), TEXT("(1,2")); });
 	Rejects(TEXT("Unknown struct field"), [](FAssetDefaults& Doc) { Doc.Self.Add(TEXT("Tint"), TEXT("(X=1)")); });
 	Rejects(TEXT("Trailing text"), [](FAssetDefaults& Doc) { Doc.Self.Add(TEXT("Steps"), TEXT("(1,2) junk")); });
-	Rejects(TEXT("Unknown component"), [](FAssetDefaults& Doc) { Doc.Components.Add(TEXT("NoSuchComponent")).Add(TEXT("Intensity"), TEXT("1.0")); });
-	Rejects(TEXT("Unknown component property"), [](FAssetDefaults& Doc) { Doc.Components.Add(TEXT("Light")).Add(TEXT("NoSuchProperty"), TEXT("1.0")); });
-	Rejects(TEXT("Wrong asset"), [](FAssetDefaults& Doc) { Doc.Asset = TEXT("/Game/Other/BP_Other"); });
+	Rejects(TEXT("Class-only variable"), [](FAssetDefaults& Doc) { Doc.Self.Add(TEXT("Hidden"), TEXT("1.0")); });
+	Rejects(TEXT("Wrong asset"), [](FAssetDefaults& Doc) { Doc.Asset = TEXT("/Game/Other/DA_Other"); });
+
+	TestTrue(TEXT("The class Blueprint is not a data asset"), Apply(Data.ClassBlueprint, MakeDoc(Data.ClassBlueprint)).HasErrors());
+	TestTrue(TEXT("The class default is not a data asset"), Apply(Data.GetClassDefault(), MakeDoc(Data.GetClassDefault())).HasErrors());
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncMissingKeyResetsTest, "JsonBlueprintSync.MissingKeyResets", TestFlags)
 bool FJsonBlueprintSyncMissingKeyResetsTest::RunTest(const FString&)
 {
-	FTestBlueprints BPs;
-	UBlueprint* BP = BPs.Parent;
-	// Compiling replaces the CDO, so look it up after each import.
-	auto CDO = [BP]() { return BP->GeneratedClass->GetDefaultObject(); };
+	// The class default of FlickerSpeed is 7, so a reset is visible as more than a zeroed value.
+	FTestData Data(7.0);
+	UDataAsset* Asset = Data.Asset;
+	TestEqual(TEXT("The asset starts at the class default"), GetDouble(Asset, TEXT("FlickerSpeed")), 7.0);
+	TestEqual(TEXT("A class default is not captured"), JoinCapturedKeys(Asset), FString());
 
-	FAssetDefaults Doc = MakeDoc(BP);
+	FAssetDefaults Doc = MakeDoc(Asset);
 	Doc.Self.Add(TEXT("FlickerSpeed"), TEXT("2.5"));
 	Doc.Self.Add(TEXT("Tint"), TEXT("(R=1.0,G=0.0,B=0.0,A=1.0)"));
-	Doc.Components.Add(TEXT("Light")).Add(TEXT("Intensity"), TEXT("1234.0"));
-	if (!ImportOk(*this, BP, Doc))
+	if (!ImportOk(*this, Asset, Doc))
 	{
 		return false;
 	}
 
-	// A document without FlickerSpeed and Light.Intensity: they go back to the parent's values, Tint stays.
-	FAssetDefaults Partial = MakeDoc(BP);
+	// A document without FlickerSpeed: it goes back to the class default, Tint stays.
+	FAssetDefaults Partial = MakeDoc(Asset);
 	Partial.Self.Add(TEXT("Tint"), TEXT("(R=1.0,G=0.0,B=0.0,A=1.0)"));
-	const FApplyResult Result = Import(BP, Partial);
+	const FApplyResult Result = Import(Asset, Partial);
 	if (!ReportErrors(*this, Result))
 	{
 		return false;
 	}
-	TestEqual(TEXT("Two keys changed"), FString::Join(Result.Changed, TEXT(",")), FString(TEXT("FlickerSpeed,Light.Intensity")));
-	TestEqual(TEXT("FlickerSpeed reset"), GetDouble(CDO(), TEXT("FlickerSpeed")), 0.0);
-	TestTrue(TEXT("Intensity reset"), FMath::IsNearlyEqual(GetTemplateLight(BP)->Intensity, GetDefault<UPointLightComponent>()->Intensity));
-	TestEqual(TEXT("Tint kept"), GetTint(CDO()), FLinearColor(1.0f, 0.0f, 0.0f, 1.0f));
-	TestEqual(TEXT("Only Tint captured"), FString::Join([&] { TArray<FString> Keys; Flatten(Capture(BP)).GetKeys(Keys); return Keys; }(), TEXT(",")), FString(TEXT("Tint")));
+	TestEqual(TEXT("One key changed"), FString::Join(Result.Changed, TEXT(",")), FString(TEXT("FlickerSpeed")));
+	TestEqual(TEXT("FlickerSpeed reset to the class default"), GetDouble(Asset, TEXT("FlickerSpeed")), 7.0);
+	TestEqual(TEXT("Tint kept"), GetTint(Asset), FLinearColor(1.0f, 0.0f, 0.0f, 1.0f));
+	TestEqual(TEXT("Only Tint captured"), JoinCapturedKeys(Asset), FString(TEXT("Tint")));
 
-	// A child that inherits a reset value follows the parent.
-	TestEqual(TEXT("Child follows the reset"), GetDouble(BPs.Child->GeneratedClass->GetDefaultObject(), TEXT("FlickerSpeed")), 0.0);
+	// An empty document resets everything.
+	if (!ReportErrors(*this, Apply(Asset, MakeDoc(Asset))))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Nothing captured after the reset"), JoinCapturedKeys(Asset), FString());
 	return true;
 }
 
@@ -444,33 +351,32 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncMergeTest, "JsonBlueprintSync
 bool FJsonBlueprintSyncMergeTest::RunTest(const FString&)
 {
 	// What the JSON Sync tab does: base = the asset when the JSON change was seen; the user changed Tint locally since; the JSON
-	// changed FlickerSpeed and dropped Light.Intensity. Applying the JSON-side keys keeps the local Tint.
-	FTestBlueprints BPs;
-	UBlueprint* BP = BPs.Parent;
-	FAssetDefaults Start = MakeDoc(BP);
+	// changed FlickerSpeed and dropped Steps. Applying the JSON-side keys keeps the local Tint.
+	FTestData Data;
+	UDataAsset* Asset = Data.Asset;
+	FAssetDefaults Start = MakeDoc(Asset);
 	Start.Self.Add(TEXT("FlickerSpeed"), TEXT("2.5"));
-	Start.Components.Add(TEXT("Light")).Add(TEXT("Intensity"), TEXT("1234.0"));
-	if (!ImportOk(*this, BP, Start))
+	Start.Self.Add(TEXT("Steps"), TEXT("(1,2)"));
+	if (!ImportOk(*this, Asset, Start))
 	{
 		return false;
 	}
-	UObject* CDO = BP->GeneratedClass->GetDefaultObject();
-	const FAssetDefaults Base = Capture(BP);
+	const FAssetDefaults Base = Capture(Asset);
 
 	FAssetDefaults File = Base;
 	File.Self.Add(TEXT("FlickerSpeed"), TEXT("3.000000"));
-	File.Components.Reset();
+	File.Self.Remove(TEXT("Steps"));
 
-	SetTint(CDO, FLinearColor(0.0f, 0.0f, 1.0f, 1.0f));
-	const FAssetDefaults Current = Capture(BP);
+	SetTint(Asset, FLinearColor(0.0f, 0.0f, 1.0f, 1.0f));
+	const FAssetDefaults Current = Capture(Asset);
 
 	const TArray<FKeyDiff> Diffs = DiffKeys(&Base, File, Current);
-	TestEqual(TEXT("Differing keys"), JoinKeys(Diffs), FString(TEXT("FlickerSpeed,Light.Intensity,Tint")));
+	TestEqual(TEXT("Differing keys"), JoinKeys(Diffs), FString(TEXT("FlickerSpeed,Steps,Tint")));
 	const FKeyDiff* Speed = FindDiff(Diffs, TEXT("FlickerSpeed"));
-	const FKeyDiff* Intensity = FindDiff(Diffs, TEXT("Light.Intensity"));
+	const FKeyDiff* Steps = FindDiff(Diffs, TEXT("Steps"));
 	const FKeyDiff* Tint = FindDiff(Diffs, TEXT("Tint"));
 	TestTrue(TEXT("FlickerSpeed changed in the JSON"), Speed && Speed->Change == EKeyChange::Json && Speed->TakeJsonByDefault());
-	TestTrue(TEXT("Intensity removed in the JSON"), Intensity && Intensity->Change == EKeyChange::Json && !Intensity->JsonValue.IsSet());
+	TestTrue(TEXT("Steps removed in the JSON"), Steps && Steps->Change == EKeyChange::Json && !Steps->JsonValue.IsSet());
 	TestTrue(TEXT("Tint changed in the asset"), Tint && Tint->Change == EKeyChange::Asset && !Tint->TakeJsonByDefault() && !Tint->JsonValue.IsSet());
 
 	TArray<FString> Keys;
@@ -482,16 +388,16 @@ bool FJsonBlueprintSyncMergeTest::RunTest(const FString&)
 		}
 	}
 	const FAssetDefaults Merged = TakeKeys(Current, File, Keys);
-	if (!ReportErrors(*this, Apply(BP, Merged)))
+	if (!ReportErrors(*this, Apply(Asset, Merged)))
 	{
 		return false;
 	}
-	TestEqual(TEXT("FlickerSpeed from the JSON"), GetDouble(CDO, TEXT("FlickerSpeed")), 3.0);
-	TestTrue(TEXT("Intensity reset from the JSON"), FMath::IsNearlyEqual(GetTemplateLight(BP)->Intensity, GetDefault<UPointLightComponent>()->Intensity));
-	TestEqual(TEXT("Local Tint kept"), GetTint(CDO), FLinearColor(0.0f, 0.0f, 1.0f, 1.0f));
+	TestEqual(TEXT("FlickerSpeed from the JSON"), GetDouble(Asset, TEXT("FlickerSpeed")), 3.0);
+	TestEqual(TEXT("Steps reset from the JSON"), JoinCapturedKeys(Asset), FString(TEXT("FlickerSpeed,Tint")));
+	TestEqual(TEXT("Local Tint kept"), GetTint(Asset), FLinearColor(0.0f, 0.0f, 1.0f, 1.0f));
 
 	// After the apply only the asset-side key differs from the file: saving writes it to the JSON.
-	TestEqual(TEXT("Only Tint left"), JoinKeys(DiffKeys(&Base, File, Capture(BP))), FString(TEXT("Tint")));
+	TestEqual(TEXT("Only Tint left"), JoinKeys(DiffKeys(&Base, File, Capture(Asset))), FString(TEXT("Tint")));
 
 	// Without a base, every difference is a conflict and nothing is ticked.
 	for (const FKeyDiff& Diff : DiffKeys(nullptr, File, Current))
@@ -513,31 +419,24 @@ bool FJsonBlueprintSyncTakeKeysTest::RunTest(const FString&)
 	Current.Asset = TEXT("/Game/X");
 	Current.Self.Add(TEXT("Keep"), TEXT("1"));
 	Current.Self.Add(TEXT("Remove"), TEXT("1"));
-	Current.Components.Add(TEXT("Light")).Add(TEXT("Intensity"), TEXT("1.0"));
-	Current.Widgets.Add(TEXT("Title")).Add(TEXT("Text"), TEXT("A"));
 
 	FAssetDefaults Source;
 	Source.Self.Add(TEXT("Keep"), TEXT("2"));
 	Source.Self.Add(TEXT("Add"), TEXT("3"));
-	Source.Widgets.Add(TEXT("Title.Slot")).Add(TEXT("ZOrder"), TEXT("7"));
 
-	const FAssetDefaults Result = TakeKeys(Current, Source, { TEXT("Add"), TEXT("Remove"), TEXT("Light.Intensity"), TEXT("Title.Slot.ZOrder") });
+	const FAssetDefaults Result = TakeKeys(Current, Source, { TEXT("Add"), TEXT("Remove") });
 	TestEqual(TEXT("Untaken key keeps the current value"), Result.Self.FindRef(TEXT("Keep")), FString(TEXT("1")));
 	TestEqual(TEXT("Taken key added"), Result.Self.FindRef(TEXT("Add")), FString(TEXT("3")));
 	TestFalse(TEXT("Taken key missing from the source is removed"), Result.Self.Contains(TEXT("Remove")));
-	TestEqual(TEXT("Empty component dropped"), Result.Components.Num(), 0);
-	const TMap<FString, FString>* Slot = Result.Widgets.Find(TEXT("Title.Slot"));
-	TestTrue(TEXT("Slot key splits at the last dot"), Slot && Slot->FindRef(TEXT("ZOrder")) == TEXT("7"));
-	TestEqual(TEXT("Other widget values kept"), Result.Widgets.FindRef(TEXT("Title")).FindRef(TEXT("Text")), FString(TEXT("A")));
 	TestEqual(TEXT("Asset field kept"), Result.Asset, Current.Asset);
 
 	FAssetDefaults Renamed = Current;
 	Renamed.Asset = TEXT("/Game/Y");
-	Renamed.Parent = TEXT("/Script/Engine.Pawn");
+	Renamed.Parent = TEXT("/Script/Engine.PrimaryDataAsset");
 	TestTrue(TEXT("ValuesEqual ignores asset and parent"), ValuesEqual(Current, Renamed));
 	TestFalse(TEXT("ValuesEqual sees values"), ValuesEqual(Current, Result));
 	TestEqual(TEXT("Flatten keys"), FString::Join([&] { TArray<FString> Keys; Flatten(Current).GetKeys(Keys); Keys.Sort(); return Keys; }(), TEXT(",")),
-		FString(TEXT("Keep,Light.Intensity,Remove,Title.Text")));
+		FString(TEXT("Keep,Remove")));
 	return true;
 }
 
@@ -546,7 +445,7 @@ bool FJsonBlueprintSyncChangedAfterReviewTest::RunTest(const FString&)
 {
 	// The subsystem's case: the user reviewed file Reviewed, took Speed from it and kept the asset's Tint, then the file changed
 	// again (Updated) before the save. With the reviewed file as the base, the new change is a JSON change and the kept value an
-	// asset change, so the user's decision stands and Two Way may apply the new change.
+	// asset change, so the user's decision stands and Automatic mode may apply the new change.
 	FAssetDefaults Reviewed;
 	Reviewed.Asset = TEXT("/Game/X");
 	Reviewed.Self.Add(TEXT("Speed"), TEXT("2"));
@@ -565,7 +464,7 @@ bool FJsonBlueprintSyncChangedAfterReviewTest::RunTest(const FString&)
 	const FKeyDiff* Tint = FindDiff(Diffs, TEXT("Tint"));
 	TestTrue(TEXT("New file change is a JSON change"), Size && Size->Change == EKeyChange::Json);
 	TestTrue(TEXT("Kept asset value is an asset change"), Tint && Tint->Change == EKeyChange::Asset && !Tint->TakeJsonByDefault());
-	TestTrue(TEXT("Two Way may apply it"), CanAutoApply(true, false, Diffs));
+	TestTrue(TEXT("Automatic mode may apply it"), CanAutoApply(true, false, Diffs));
 
 	// The new file also changed the kept key: a conflict, left for the user.
 	FAssetDefaults Clash = Updated;
@@ -573,7 +472,7 @@ bool FJsonBlueprintSyncChangedAfterReviewTest::RunTest(const FString&)
 	const TArray<FKeyDiff> ClashDiffs = DiffKeys(&Reviewed, Clash, Asset);
 	const FKeyDiff* TintClash = FindDiff(ClashDiffs, TEXT("Tint"));
 	TestTrue(TEXT("Both changed Tint"), TintClash && TintClash->Change == EKeyChange::Both);
-	TestFalse(TEXT("Two Way leaves a conflict"), CanAutoApply(true, false, ClashDiffs));
+	TestFalse(TEXT("Automatic mode leaves a conflict"), CanAutoApply(true, false, ClashDiffs));
 
 	// The new file changed a key the user took from the reviewed file (e.g. a teammate reverted it): a JSON change, ticked.
 	FAssetDefaults Reverted = Reviewed;
@@ -643,7 +542,7 @@ bool FJsonBlueprintSyncBaseChoiceTest::RunTest(const FString&)
 	TestTrue(TEXT("Asset changed, JSON not: base is the file (JSON out of date)"), ChooseBase(AssetOnly) == EBaseSource::File);
 	AssetOnly.bAssetDirty = true;
 	AssetOnly.bParentDiffers = true;
-	TestTrue(TEXT("Unchanged JSON is the base even if the asset is dirty or reparented"), ChooseBase(AssetOnly) == EBaseSource::File);
+	TestTrue(TEXT("Unchanged JSON is the base even if the asset is dirty or its class changed"), ChooseBase(AssetOnly) == EBaseSource::File);
 
 	FBaseInputs BothChanged = JsonOnly;
 	BothChanged.bAssetChanged = true;
@@ -651,11 +550,11 @@ bool FJsonBlueprintSyncBaseChoiceTest::RunTest(const FString&)
 	FBaseInputs Dirty = JsonOnly;
 	Dirty.bAssetDirty = true;
 	TestTrue(TEXT("JSON changed, unsaved edits: no base"), ChooseBase(Dirty) == EBaseSource::None);
-	FBaseInputs Reparented = JsonOnly;
-	Reparented.bParentDiffers = true;
-	TestTrue(TEXT("JSON changed, other parent: no base"), ChooseBase(Reparented) == EBaseSource::None);
+	FBaseInputs OtherClass = JsonOnly;
+	OtherClass.bParentDiffers = true;
+	TestTrue(TEXT("JSON changed, other class: no base"), ChooseBase(OtherClass) == EBaseSource::None);
 
-	// Two Way applies on its own only when the JSON changed something and nothing is in doubt.
+	// Automatic mode applies on its own only when the JSON changed something and nothing is in doubt.
 	auto MakeDiff = [](const TCHAR* Key, EKeyChange Change)
 	{
 		FKeyDiff Diff;
@@ -668,7 +567,7 @@ bool FJsonBlueprintSyncBaseChoiceTest::RunTest(const FString&)
 	const TArray<FKeyDiff> Conflict = { MakeDiff(TEXT("A"), EKeyChange::Json), MakeDiff(TEXT("C"), EKeyChange::Both) };
 	TestTrue(TEXT("Auto-apply JSON keys"), CanAutoApply(true, false, JsonKeys));
 	TestFalse(TEXT("No auto-apply without a base"), CanAutoApply(false, false, JsonKeys));
-	TestFalse(TEXT("No auto-apply with another parent"), CanAutoApply(true, true, JsonKeys));
+	TestFalse(TEXT("No auto-apply with another class"), CanAutoApply(true, true, JsonKeys));
 	TestFalse(TEXT("No auto-apply with a conflict"), CanAutoApply(true, false, Conflict));
 	TestFalse(TEXT("No auto-apply of an out-of-date JSON"), CanAutoApply(true, false, AssetKeys));
 	TestFalse(TEXT("No auto-apply without keys"), CanAutoApply(true, false, {}));
@@ -689,193 +588,92 @@ bool FJsonBlueprintSyncBaseChoiceTest::RunTest(const FString&)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncSettingsTest, "JsonBlueprintSync.Settings", TestFlags)
 bool FJsonBlueprintSyncSettingsTest::RunTest(const FString&)
 {
-	UJsonBlueprintSyncSettings* Settings = NewObject<UJsonBlueprintSyncSettings>(GetTransientPackage());
-	TestTrue(TEXT("Blueprints default to Write JSON Only"), Settings->GetMode(EAssetKind::Blueprint) == EJsonSyncMode::WriteJsonOnly);
-	TestTrue(TEXT("Widget Blueprints default to Write JSON Only"), Settings->GetMode(EAssetKind::WidgetBlueprint) == EJsonSyncMode::WriteJsonOnly);
-	TestTrue(TEXT("Data assets default to Two Way"), Settings->GetMode(EAssetKind::DataAsset) == EJsonSyncMode::TwoWay);
-	TestTrue(TEXT("Other assets are not synced"), Settings->GetMode(EAssetKind::None) == EJsonSyncMode::None);
+	const UJsonBlueprintSyncSettings* Fresh = NewObject<UJsonBlueprintSyncSettings>(GetTransientPackage());
+	TestTrue(TEXT("Automatic by default"), Fresh->Mode == EJsonSyncMode::Automatic);
+	TestEqual(TEXT("No excluded folders by default"), Fresh->ExcludedFolders.Num(), 0);
 
-	Settings->Blueprints = EJsonSyncMode::TwoWay;
-	Settings->WidgetBlueprints = EJsonSyncMode::TwoWay;
-	TestTrue(TEXT("Two Way is not allowed for Blueprints"), Settings->GetMode(EAssetKind::Blueprint) == EJsonSyncMode::WriteJsonOnly);
-	TestTrue(TEXT("Two Way is not allowed for Widget Blueprints"), Settings->GetMode(EAssetKind::WidgetBlueprint) == EJsonSyncMode::WriteJsonOnly);
-	Settings->DataAssets = EJsonSyncMode::None;
-	TestTrue(TEXT("None turns syncing off"), Settings->GetMode(EAssetKind::DataAsset) == EJsonSyncMode::None);
+	const TArray<FString> Roots = GetSyncedRoots();
+	TestTrue(TEXT("/Game is synced"), Roots.Contains(TEXT("/Game")));
+	TestFalse(TEXT("/Engine is not synced"), Roots.Contains(TEXT("/Engine")));
+	TestTrue(TEXT("Under /Game"), IsSyncedPackage(TEXT("/Game/Features/DA_Lamp")));
+	TestFalse(TEXT("Engine content"), IsSyncedPackage(TEXT("/Engine/EngineMaterials/DA_X")));
+	TestFalse(TEXT("Temp package"), IsSyncedPackage(TEXT("/Temp/JsonBlueprintSyncTests/DA_X")));
+	TestFalse(TEXT("A root is matched as a whole folder"), IsSyncedPackage(TEXT("/GameX/DA_X")));
+
+	// The excluded folders of the real settings, restored afterwards (not saved to the ini).
+	UJsonBlueprintSyncSettings* Settings = GetMutableDefault<UJsonBlueprintSyncSettings>();
+	const TArray<FDirectoryPath> Saved = Settings->ExcludedFolders;
+	ON_SCOPE_EXIT { Settings->ExcludedFolders = Saved; };
+	FDirectoryPath ThirdParty;
+	ThirdParty.Path = TEXT("/Game/ThirdParty/");
+	Settings->ExcludedFolders = { ThirdParty };
+	TestFalse(TEXT("Excluded folder"), IsSyncedPackage(TEXT("/Game/ThirdParty/Pack/DA_X")));
+	TestFalse(TEXT("Excluded folder, other case"), IsSyncedPackage(TEXT("/Game/thirdparty/DA_X")));
+	TestTrue(TEXT("A folder is excluded as a whole"), IsSyncedPackage(TEXT("/Game/ThirdPartyTools/DA_X")));
+	TestTrue(TEXT("Other folders stay synced"), IsSyncedPackage(TEXT("/Game/Features/DA_Lamp")));
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncDataAssetTest, "JsonBlueprintSync.DataAsset", TestFlags)
 bool FJsonBlueprintSyncDataAssetTest::RunTest(const FString&)
 {
-	// A Blueprint subclass of UPrimaryDataAsset with an instance-editable Power and a class-only Hidden, and one data asset of it.
-	const FString Suffix = FGuid::NewGuid().ToString(EGuidFormats::Digits);
-	UBlueprint* ClassBP = FTestBlueprints::Create(UPrimaryDataAsset::StaticClass(), TEXT("BP_Data_") + Suffix);
-	FBlueprintEditorUtils::AddMemberVariable(ClassBP, TEXT("Power"), DoubleType());
-	FBlueprintEditorUtils::AddMemberVariable(ClassBP, TEXT("Hidden"), DoubleType());
-	FBlueprintEditorUtils::SetBlueprintOnlyEditableFlag(ClassBP, TEXT("Power"), false);
-	FKismetEditorUtilities::CompileBlueprint(ClassBP, EBlueprintCompileOptions::SkipGarbageCollection);
+	FTestData Data;
+	TestTrue(TEXT("Data asset"), IsDataAsset(Data.Asset));
+	TestTrue(TEXT("Data asset from asset data"), IsDataAsset(FAssetData(Data.Asset)));
+	TestFalse(TEXT("The class Blueprint is not a data asset"), IsDataAsset(Data.ClassBlueprint));
+	TestFalse(TEXT("The class Blueprint's asset data is not a data asset"), IsDataAsset(FAssetData(Data.ClassBlueprint)));
+	TestFalse(TEXT("A class default is not a data asset"), IsDataAsset(Data.GetClassDefault()));
+	TestFalse(TEXT("Null is not a data asset"), IsDataAsset(static_cast<const UObject*>(nullptr)));
 
-	const FString Name = TEXT("DA_Test_") + Suffix;
-	UDataAsset* Asset = NewObject<UDataAsset>(CreateTestPackage(Name), ClassBP->GeneratedClass, FName(*Name), RF_Public | RF_Standalone | RF_Transactional);
-	TestTrue(TEXT("Data asset kind"), GetAssetKind(Asset) == EAssetKind::DataAsset);
-	TestTrue(TEXT("Data asset kind from asset data"), GetAssetKind(FAssetData(Asset)) == EAssetKind::DataAsset);
-	TestTrue(TEXT("Class Blueprint is a Blueprint"), GetAssetKind(ClassBP) == EAssetKind::Blueprint);
-	TestTrue(TEXT("Data assets apply after Blueprints"), GetApplyOrder(ClassBP) < GetApplyOrder(Asset));
-
-	const FAssetDefaults Initial = Capture(Asset);
-	TestEqual(TEXT("New data asset has no values"), Initial.Self.Num(), 0);
-	TestEqual(TEXT("Parent is the asset's class"), Initial.Parent, ClassBP->GeneratedClass->GetPathName());
-	TestEqual(TEXT("Asset package"), Initial.Asset, Asset->GetPackage()->GetName());
-
-	FAssetDefaults Doc = MakeDoc(Asset);
-	Doc.Self.Add(TEXT("Power"), TEXT("5.0"));
-	const FApplyResult Result = Import(Asset, Doc);
-	if (!ReportErrors(*this, Result))
-	{
-		return false;
-	}
-	TestEqual(TEXT("One value changed"), Result.Changed.Num(), 1);
-	TestEqual(TEXT("Power set on the asset"), GetDouble(Asset, TEXT("Power")), 5.0);
-	TestEqual(TEXT("Class default untouched"), GetDouble(ClassBP->GeneratedClass->GetDefaultObject(), TEXT("Power")), 0.0);
-	TestTrue(TEXT("Package marked dirty"), Asset->GetPackage()->IsDirty());
-
-	const FAssetDefaults Captured = Capture(Asset);
-	TestEqual(TEXT("Captured value"), Captured.Self.FindRef(TEXT("Power")).Left(1), FString(TEXT("5")));
-	TestEqual(TEXT("Re-import changes nothing"), Import(Asset, Captured).Changed.Num(), 0);
-
-	// Class-only variables are not part of a data asset's JSON.
-	FAssetDefaults Hidden = MakeDoc(Asset);
-	Hidden.Self.Add(TEXT("Hidden"), TEXT("1.0"));
-	TestTrue(TEXT("Class-only variable rejected"), Apply(Asset, Hidden).HasErrors());
-	FAssetDefaults Components = MakeDoc(Asset);
-	Components.Components.Add(TEXT("Light")).Add(TEXT("Intensity"), TEXT("1.0"));
-	TestTrue(TEXT("Components rejected"), Apply(Asset, Components).HasErrors());
-	TestEqual(TEXT("Nothing applied"), GetDouble(Asset, TEXT("Power")), 5.0);
-
-	// A missing key resets to the class default.
-	if (!ReportErrors(*this, Apply(Asset, MakeDoc(Asset))))
-	{
-		return false;
-	}
-	TestEqual(TEXT("Power reset"), GetDouble(Asset, TEXT("Power")), 0.0);
-	TestEqual(TEXT("Nothing captured after the reset"), Capture(Asset).Self.Num(), 0);
+	// Other assets are not synced.
+	UPackage* Package = Data.Asset->GetPackage();
+	TestFalse(TEXT("A package is not a data asset"), IsDataAsset(Package));
+	TestTrue(TEXT("Apply refuses other assets"), Apply(Package, MakeDoc(Package)).HasErrors());
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncInheritedComponentTest, "JsonBlueprintSync.InheritedComponent", TestFlags)
-bool FJsonBlueprintSyncInheritedComponentTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncMissingPairsTest, "JsonBlueprintSync.MissingPairs", TestFlags)
+
+bool FJsonBlueprintSyncMissingPairsTest::RunTest(const FString&)
 {
-	FTestBlueprints BPs;
+	// A JSON root of its own, so the project's JSON files do not matter.
+	const FString JsonRoot = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("JsonBlueprintSyncTests/MissingPairs"));
+	IFileManager::Get().DeleteDirectory(*JsonRoot, false, true);
+	ON_SCOPE_EXIT { IFileManager::Get().DeleteDirectory(*JsonRoot, false, true); };
 
-	FAssetDefaults ParentDoc = MakeDoc(BPs.Parent);
-	ParentDoc.Components.Add(TEXT("Light")).Add(TEXT("Intensity"), TEXT("1000.0"));
-	if (!ImportOk(*this, BPs.Parent, ParentDoc))
+	UJsonBlueprintSyncSettings* Settings = GetMutableDefault<UJsonBlueprintSyncSettings>();
+	const TArray<FDirectoryPath> Saved = Settings->ExcludedFolders;
+	ON_SCOPE_EXIT { Settings->ExcludedFolders = Saved; };
+	FDirectoryPath Excluded;
+	Excluded.Path = TEXT("/Game/JsonBlueprintSyncTestsExcluded");
+	Settings->ExcludedFolders = { Excluded };
+
+	const FString Gone = GetJsonPath(JsonRoot, TEXT("/Game/JsonBlueprintSyncTestsGone/DA_Gone"));
+	const FString Skipped = GetJsonPath(JsonRoot, TEXT("/Game/JsonBlueprintSyncTestsExcluded/DA_Gone"));
+	TestTrue(TEXT("Write a JSON without its asset"), FFileHelper::SaveStringToFile(TEXT("{}\n"), *Gone));
+	TestTrue(TEXT("Write a JSON in an excluded folder"), FFileHelper::SaveStringToFile(TEXT("{}\n"), *Skipped));
+
+	FMissingPairs Missing = FindMissingPairs(JsonRoot);
+	TestTrue(TEXT("A JSON without its asset is reported"), Missing.JsonWithoutAsset.Contains(FPaths::ConvertRelativePathToFull(Gone)));
+	TestFalse(TEXT("A JSON in an excluded folder is not"), Missing.JsonWithoutAsset.Contains(FPaths::ConvertRelativePathToFull(Skipped)));
+	for (const FString& PackageName : Missing.AssetsWithoutJson)
 	{
-		return false;
+		TestTrue(FString::Printf(TEXT("%s is synced"), *PackageName), IsSyncedPackage(PackageName));
 	}
-	TestEqual(TEXT("Child without override exports no components"), Capture(BPs.Child).Components.Num(), 0);
+	TArray<FString> Sorted = Missing.AssetsWithoutJson;
+	Sorted.Sort();
+	TestEqual(TEXT("Assets are sorted"), Missing.AssetsWithoutJson, Sorted);
 
-	FAssetDefaults ChildDoc = MakeDoc(BPs.Child);
-	ChildDoc.Components.Add(TEXT("Light")).Add(TEXT("Intensity"), TEXT("500.0"));
-	if (!ImportOk(*this, BPs.Child, ChildDoc))
+	// A data asset of the project, if it has any: with its JSON it is in neither list.
+	if (Missing.AssetsWithoutJson.Num() > 0)
 	{
-		return false;
+		const FString PackageName = Missing.AssetsWithoutJson[0];
+		const FString Path = GetJsonPath(JsonRoot, PackageName);
+		TestTrue(TEXT("Write the asset's JSON"), FFileHelper::SaveStringToFile(TEXT("{}\n"), *Path));
+		Missing = FindMissingPairs(JsonRoot);
+		TestFalse(TEXT("An asset with its JSON is not reported"), Missing.AssetsWithoutJson.Contains(PackageName));
+		TestFalse(TEXT("Its JSON is not reported"), Missing.JsonWithoutAsset.Contains(FPaths::ConvertRelativePathToFull(Path)));
 	}
-
-	UInheritableComponentHandler* Handler = BPs.Child->GetInheritableComponentHandler(false);
-	USCS_Node* ParentNode = BPs.Parent->SimpleConstructionScript->FindSCSNode(TEXT("Light"));
-	UPointLightComponent* Override = Handler && ParentNode ? Cast<UPointLightComponent>(Handler->GetOverridenComponentTemplate(FComponentKey(ParentNode))) : nullptr;
-	if (!TestNotNull(TEXT("Child override created"), Override))
-	{
-		return false;
-	}
-	TestTrue(TEXT("Child override value"), FMath::IsNearlyEqual(Override->Intensity, 500.0f));
-	TestTrue(TEXT("Parent template unchanged"), FMath::IsNearlyEqual(GetTemplateLight(BPs.Parent)->Intensity, 1000.0f));
-
-	const FAssetDefaults Captured = Capture(BPs.Child);
-	const TMap<FString, FString>* Light = Captured.Components.Find(TEXT("Light"));
-	TestTrue(TEXT("Child exports only the differing value"), Light && Light->Num() == 1 && Light->Contains(TEXT("Intensity")));
-
-	// No key for the inherited component: the child's override goes back to the parent's value.
-	if (!ImportOk(*this, BPs.Child, MakeDoc(BPs.Child)))
-	{
-		return false;
-	}
-	Override = Handler ? Cast<UPointLightComponent>(Handler->GetOverridenComponentTemplate(FComponentKey(ParentNode))) : nullptr;
-	TestTrue(TEXT("Child override back to the parent's value"), !Override || FMath::IsNearlyEqual(Override->Intensity, 1000.0f));
-	TestEqual(TEXT("Matching the parent is not an override"), Capture(BPs.Child).Components.Num(), 0);
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncWidgetTest, "JsonBlueprintSync.Widget", TestFlags)
-bool FJsonBlueprintSyncWidgetTest::RunTest(const FString&)
-{
-	// Widget Blueprint with a canvas "Root" holding a text block "Title", built the way the Designer builds it.
-	const FString Name = TEXT("WBP_Test_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
-	UWidgetBlueprint* Blueprint = CastChecked<UWidgetBlueprint>(FKismetEditorUtilities::CreateBlueprint(UUserWidget::StaticClass(), CreateTestPackage(Name),
-		FName(*Name), BPTYPE_Normal, UWidgetBlueprint::StaticClass(), UWidgetBlueprintGeneratedClass::StaticClass()));
-	UCanvasPanel* Root = Blueprint->WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("Root"));
-	Blueprint->WidgetTree->RootWidget = Root;
-	UTextBlock* Title = Blueprint->WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("Title"));
-	UCanvasPanelSlot* TitleSlot = Root->AddChildToCanvas(Title);
-	Blueprint->OnVariableAdded(Root->GetFName());
-	Blueprint->OnVariableAdded(Title->GetFName());
-	Title->SetText(FText::FromString(TEXT("Hello")));
-	TitleSlot->SetZOrder(3);
-	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
-	TestTrue(TEXT("Widget Blueprint kind"), GetAssetKind(Blueprint) == EAssetKind::WidgetBlueprint);
-	TestTrue(TEXT("Widget Blueprint kind from asset data"), GetAssetKind(FAssetData(Blueprint)) == EAssetKind::WidgetBlueprint);
-
-	// Export: Designer values go under "widgets", the layout in the parent panel under "<Widget>.Slot".
-	const FAssetDefaults Initial = Capture(Blueprint);
-	const TMap<FString, FString>* TitleValues = Initial.Widgets.Find(TEXT("Title"));
-	const TMap<FString, FString>* SlotValues = Initial.Widgets.Find(TEXT("Title.Slot"));
-	TestTrue(TEXT("Text captured"), TitleValues && TitleValues->FindRef(TEXT("Text")).Contains(TEXT("Hello")));
-	TestFalse(TEXT("Unchanged value not captured"), TitleValues && TitleValues->Contains(TEXT("RenderOpacity")));
-	TestEqual(TEXT("Slot captured"), SlotValues ? SlotValues->FindRef(TEXT("ZOrder")) : FString(), FString(TEXT("3")));
-	TestEqual(TEXT("Widgets are not components"), Initial.Components.Num(), 0);
-
-	const FString Json = ToJson(Initial);
-	TestTrue(TEXT("Widgets section written"), Json.Contains(TEXT("\"widgets\": {")));
-	FAssetDefaults Parsed;
-	FString Error;
-	TestTrue(TEXT("Parses its own output"), FromJson(Json, Parsed, Error));
-	TestEqual(TEXT("Round trip is byte-identical"), ToJson(Parsed), Json);
-
-	// Import: values reach the Designer templates and, after the compile, the class's widget tree.
-	FAssetDefaults Doc = Initial;
-	Doc.Widgets.FindOrAdd(TEXT("Title")).Add(TEXT("RenderOpacity"), TEXT("0.500000"));
-	Doc.Widgets.FindOrAdd(TEXT("Title.Slot")).Add(TEXT("ZOrder"), TEXT("7"));
-	if (!ImportOk(*this, Blueprint, Doc))
-	{
-		return false;
-	}
-	TestEqual(TEXT("Template value"), Title->GetRenderOpacity(), 0.5f);
-	TestEqual(TEXT("Slot value"), TitleSlot->GetZOrder(), 7);
-	UWidgetTree* CompiledTree = CastChecked<UWidgetBlueprintGeneratedClass>(Blueprint->GeneratedClass)->GetWidgetTreeArchetype();
-	const UTextBlock* Compiled = CompiledTree ? Cast<UTextBlock>(CompiledTree->FindWidget(TEXT("Title"))) : nullptr;
-	TestTrue(TEXT("Compiled widget tree has the value"), Compiled && FMath::IsNearlyEqual(Compiled->GetRenderOpacity(), 0.5f));
-	TestEqual(TEXT("Re-export is identical"), ToJson(Capture(Blueprint)), ToJson(Doc));
-	TestTrue(TEXT("Diff keys include slot keys"), FindDiff(DiffKeys(nullptr, Doc, Initial), TEXT("Title.Slot.ZOrder")) != nullptr);
-
-	// Keys missing from the document go back to the widget class defaults; keys split at the last '.', so "Title.Slot.ZOrder"
-	// targets the slot.
-	const FAssetDefaults Reset = TakeKeys(Doc, Initial, { TEXT("Title.RenderOpacity"), TEXT("Title.Slot.ZOrder") });
-	if (!ImportOk(*this, Blueprint, Reset))
-	{
-		return false;
-	}
-	TestEqual(TEXT("Value reset"), Title->GetRenderOpacity(), 1.0f);
-	TestEqual(TEXT("Slot value back to the initial value"), TitleSlot->GetZOrder(), 3);
-	TestTrue(TEXT("Text kept"), Title->GetText().ToString() == TEXT("Hello"));
-	TestEqual(TEXT("Capture matches"), ToJson(Capture(Blueprint)), ToJson(Initial));
-
-	// An unknown widget is an error, and nothing else in the file is applied.
-	FAssetDefaults Bad = Initial;
-	Bad.Widgets.FindOrAdd(TEXT("Title")).Add(TEXT("RenderOpacity"), TEXT("0.25"));
-	Bad.Widgets.Add(TEXT("Missing")).Add(TEXT("RenderOpacity"), TEXT("0.25"));
-	TestTrue(TEXT("Unknown widget rejected"), Apply(Blueprint, Bad).HasErrors());
-	TestEqual(TEXT("Nothing applied"), Title->GetRenderOpacity(), 1.0f);
 	return true;
 }
 

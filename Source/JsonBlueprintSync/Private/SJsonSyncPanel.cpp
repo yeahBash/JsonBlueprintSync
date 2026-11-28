@@ -28,7 +28,6 @@ namespace
 	using EKeySource = SJsonSyncPanel::EKeySource;
 
 	const FName ColumnAsset(TEXT("Asset"));
-	const FName ColumnKind(TEXT("Kind"));
 	const FName ColumnStatus(TEXT("Status"));
 	const FName ColumnKey(TEXT("Key"));
 	const FName ColumnJson(TEXT("Json"));
@@ -106,11 +105,6 @@ namespace
 			if (Column == ColumnAsset)
 			{
 				Text = FText::FromString(FPackageName::GetShortName(Item->PackageName));
-			}
-			else if (Column == ColumnKind)
-			{
-				Text = FText::FromString(LexToString(Item->Kind));
-				Color = FSlateColor::UseSubduedForeground();
 			}
 			else
 			{
@@ -340,9 +334,8 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 					.HeaderRow
 					(
 						SNew(SHeaderRow)
-						+ SHeaderRow::Column(ColumnAsset).DefaultLabel(LOCTEXT("ColumnAsset", "Asset")).FillWidth(0.45f)
-						+ SHeaderRow::Column(ColumnKind).DefaultLabel(LOCTEXT("ColumnKind", "Type")).FillWidth(0.25f)
-						+ SHeaderRow::Column(ColumnStatus).DefaultLabel(LOCTEXT("ColumnStatus", "Status")).FillWidth(0.3f)
+						+ SHeaderRow::Column(ColumnAsset).DefaultLabel(LOCTEXT("ColumnAsset", "Asset")).FillWidth(0.6f)
+						+ SHeaderRow::Column(ColumnStatus).DefaultLabel(LOCTEXT("ColumnStatus", "Status")).FillWidth(0.4f)
 					)
 				]
 			]
@@ -397,6 +390,7 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 						.Text(LOCTEXT("AllJson", "All from JSON"))
 						.ToolTipText(LOCTEXT("AllJsonTip", "Use the JSON value for every key."))
 						.IsEnabled(this, &SJsonSyncPanel::HasKeys)
+						.Visibility(this, &SJsonSyncPanel::GetKeyChoiceVisibility)
 						.OnClicked(this, &SJsonSyncPanel::OnSetAllClicked, EKeySource::Json)
 					]
 					+ SHorizontalBox::Slot()
@@ -407,6 +401,7 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 						.Text(LOCTEXT("AllAsset", "All from Asset"))
 						.ToolTipText(LOCTEXT("AllAssetTip", "Keep the asset's value for every key, discarding the JSON's changes."))
 						.IsEnabled(this, &SJsonSyncPanel::HasKeys)
+						.Visibility(this, &SJsonSyncPanel::GetKeyChoiceVisibility)
 						.OnClicked(this, &SJsonSyncPanel::OnSetAllClicked, EKeySource::Asset)
 					]
 					+ SHorizontalBox::Slot()
@@ -417,6 +412,7 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 						.Text(LOCTEXT("ResetChoices", "Reset"))
 						.ToolTipText(LOCTEXT("ResetChoicesTip", "Undo your choices: keys changed on one side use that side, conflicts are not chosen."))
 						.IsEnabled(this, &SJsonSyncPanel::HasKeys)
+						.Visibility(this, &SJsonSyncPanel::GetKeyChoiceVisibility)
 						.OnClicked(this, &SJsonSyncPanel::OnSetAllClicked, EKeySource::None)
 					]
 					+ SHorizontalBox::Slot()
@@ -442,10 +438,26 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 					.Padding(4.0f, 0.0f, 0.0f, 0.0f)
 					[
 						SNew(SButton)
-						.Text(LOCTEXT("Overwrite", "Overwrite JSON"))
-						.ToolTipText(LOCTEXT("OverwriteTip", "Discard the unreadable JSON: write the asset's current values to the JSON file."))
-						.Visibility_Lambda([this]() { return HasSelection() && !SelectedError.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed; })
+						.ButtonStyle(FAppStyle::Get(), "PrimaryButton")
+						.Text(LOCTEXT("WriteJson", "Write JSON"))
+						.ToolTipText_Lambda([this]()
+						{
+							return SelectedError.IsEmpty()
+								? LOCTEXT("WriteJsonTip", "Keep the asset as it is: write its current values to the JSON file.")
+								: LOCTEXT("WriteJsonErrorTip", "Discard the unreadable JSON: write the asset's current values to the JSON file.");
+						})
+						.Visibility_Lambda([this]() { return HasSelection() && (!SelectedError.IsEmpty() || IsOutOfDateSelected()) ? EVisibility::Visible : EVisibility::Collapsed; })
 						.OnClicked(this, &SJsonSyncPanel::OnOverwriteClicked)
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.Padding(4.0f, 0.0f, 0.0f, 0.0f)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("ApplyJson", "Apply JSON"))
+						.ToolTipText(LOCTEXT("ApplyJsonTip", "Revert the asset's changes: set every listed key to its JSON value (one undo step; the asset is not saved)."))
+						.Visibility_Lambda([this]() { return IsOutOfDateSelected() ? EVisibility::Visible : EVisibility::Collapsed; })
+						.OnClicked(this, &SJsonSyncPanel::OnApplyAllJsonClicked)
 					]
 					+ SHorizontalBox::Slot()
 					.AutoWidth()
@@ -455,6 +467,7 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 						.Text(LOCTEXT("Apply", "Apply"))
 						.ToolTipText(LOCTEXT("ApplyTip", "Set the keys that use JSON to their JSON values (one undo step; the asset is not saved). Keys that use the asset keep its value; saving the asset writes them to the JSON. If nothing in the asset changes, the JSON is written now."))
 						.IsEnabled(this, &SJsonSyncPanel::CanApply)
+						.Visibility(this, &SJsonSyncPanel::GetKeyChoiceVisibility)
 						.OnClicked(this, &SJsonSyncPanel::OnApplyClicked, false)
 					]
 					+ SHorizontalBox::Slot()
@@ -466,6 +479,7 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 						.Text(LOCTEXT("ApplySave", "Apply and Save"))
 						.ToolTipText(LOCTEXT("ApplySaveTip", "Apply, then save the asset, which writes its JSON with the chosen values. Ctrl+Z still reverts the apply."))
 						.IsEnabled(this, &SJsonSyncPanel::CanApply)
+						.Visibility(this, &SJsonSyncPanel::GetKeyChoiceVisibility)
 						.OnClicked(this, &SJsonSyncPanel::OnApplyClicked, true)
 					]
 				]
@@ -508,7 +522,6 @@ void SJsonSyncPanel::Refresh()
 			}
 			const TSharedPtr<FAssetItem> Item = MakeShared<FAssetItem>();
 			Item->PackageName = PackageName;
-			Item->Kind = View.Kind;
 			if (!View.Error.IsEmpty())
 			{
 				Item->Status = LOCTEXT("StatusError", "Cannot read the JSON");
@@ -516,12 +529,13 @@ void SJsonSyncPanel::Refresh()
 			}
 			else if (View.ParentDiffers())
 			{
-				Item->Status = FText::Format(LOCTEXT("StatusParent", "{0} keys, parent differs"), FText::AsNumber(View.Keys.Num()));
+				Item->Status = FText::Format(LOCTEXT("StatusParent", "{0} keys, class differs"), FText::AsNumber(View.Keys.Num()));
 				Item->bProblem = true;
 			}
 			else if (View.IsJsonOutOfDate())
 			{
-				Item->Status = FText::Format(LOCTEXT("StatusOutOfDate", "{0} keys, JSON out of date"), FText::AsNumber(View.Keys.Num()));
+				Item->Status = FText::Format(LOCTEXT("StatusOutOfDate", "{0} keys, asset changed"), FText::AsNumber(View.Keys.Num()));
+				Item->bProblem = true;
 			}
 			else if (View.Keys.ContainsByPredicate([](const FKeyDiff& Diff) { return Diff.Change == EKeyChange::Both; }))
 			{
@@ -721,12 +735,12 @@ FText SJsonSyncPanel::GetDetailText() const
 	}
 	if (!SelectedJsonParent.IsEmpty())
 	{
-		return FText::Format(LOCTEXT("DetailParent", "{0}\nThe JSON was written for parent {1}, but the asset's parent is {2} (it was reparented, or one side is out of date). The JSON's values were relative to the old parent, so keys it does not list may differ as well. Usually: All from Asset, then Apply."),
+		return FText::Format(LOCTEXT("DetailParent", "{0}\nThe JSON was written for class {1}, but the asset's class is {2} (the asset was recreated, or one side is out of date). The JSON's values were relative to the other class's defaults, so keys it does not list may differ as well. Usually: All from Asset, then Apply."),
 			FText::FromString(SelectedPackage), FText::FromString(SelectedJsonParent), FText::FromString(SelectedAssetParent));
 	}
 	if (bSelectedOutOfDate)
 	{
-		return FText::Format(LOCTEXT("DetailOutOfDate", "{0}\nThe JSON has no changes of its own: the asset changed since its JSON was written (e.g. the .uasset was committed without it). Apply writes the asset's values to the JSON; using the JSON for a key reverts the asset's change."),
+		return FText::Format(LOCTEXT("DetailOutOfDate", "{0}\nThe asset changed, but its JSON did not (e.g. the .uasset was committed without its JSON, or saved while the plugin was off). The JSON is the source of truth, so this is never fixed automatically: Write JSON keeps the asset's values, Apply JSON reverts the asset to the JSON."),
 			FText::FromString(SelectedPackage));
 	}
 	if (!bSelectedHasBase)
@@ -810,6 +824,35 @@ FReply SJsonSyncPanel::OnOverwriteClicked()
 	if (UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get())
 	{
 		Owner->OverwriteJson(SelectedPackage);
+	}
+	return FReply::Handled();
+}
+
+bool SJsonSyncPanel::IsOutOfDateSelected() const
+{
+	return HasSelection() && SelectedError.IsEmpty() && bSelectedOutOfDate;
+}
+
+EVisibility SJsonSyncPanel::GetKeyChoiceVisibility() const
+{
+	return IsOutOfDateSelected() ? EVisibility::Collapsed : EVisibility::Visible;
+}
+
+FReply SJsonSyncPanel::OnApplyAllJsonClicked()
+{
+	if (!IsOutOfDateSelected())
+	{
+		return FReply::Handled();
+	}
+	TArray<FString> Keys;
+	for (const TSharedPtr<FKeyItem>& Item : KeyItems)
+	{
+		Keys.Add(Item->Diff.Key);
+	}
+	if (UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get())
+	{
+		const FString PackageName = SelectedPackage;
+		Owner->ApplyJson(PackageName, Keys, false);
 	}
 	return FReply::Handled();
 }

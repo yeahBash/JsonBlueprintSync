@@ -8,47 +8,24 @@ struct FAssetData;
 
 namespace JsonBlueprintSync
 {
-	/** The kinds of asset that are synced. Each has its own mode in the project settings. */
-	enum class EAssetKind : uint8
-	{
-		/** Not synced. */
-		None,
-		/** Any Blueprint except Widget Blueprints: class defaults and component templates. */
-		Blueprint,
-		/** Widget Blueprint: class defaults and the Designer's widgets. */
-		WidgetBlueprint,
-		/** Instance of a UDataAsset subclass (native or Blueprint class): the asset's own properties. */
-		DataAsset,
-	};
-
 	/**
-	 * In-memory form of one asset's JSON file.
+	 * In-memory form of one data asset's JSON file.
 	 *
-	 * Values are Unreal property text (the Details-panel copy/paste format), diffed against the archetype: the parent class CDO for a
-	 * Blueprint's own defaults, the parent template for components, the widget class CDO for widgets, and the asset's class CDO for a
-	 * data asset. The document is complete: a key that is missing means the archetype's value.
+	 * Values are Unreal property text (the Details-panel copy/paste format), diffed against the asset's archetype, the class defaults.
+	 * The document is complete: a key that is missing means the class default.
 	 */
 	struct JSONBLUEPRINTSYNC_API FAssetDefaults
 	{
 		static constexpr int32 SchemaVersion = 2;
 
-		/** Package name, e.g. /Game/Features/Light/BP_Lamp. */
+		/** Package name, e.g. /Game/Features/Light/DA_Lamp. */
 		FString Asset;
 
-		/** Blueprints: path of the parent class, e.g. /Script/Engine.Actor. Data assets: path of the asset's class. */
+		/** Path of the asset's class, e.g. /Script/MyGame.LampData or /Game/Features/Light/BP_LampData.BP_LampData_C. */
 		FString Parent;
 
-		/** "overrides.self": property name -> value text, for the class default object of a Blueprint or the data asset itself. */
+		/** "overrides.self": property name -> value text. */
 		TMap<FString, FString> Self;
-
-		/** Component name -> property name -> value text, for component templates. */
-		TMap<FString, TMap<FString, FString>> Components;
-
-		/**
-		 * Widget Blueprints only: widget name -> property name -> value text, for the widgets in the Designer's widget tree,
-		 * diffed against the widget class defaults. "<Widget>.Slot" holds the layout of the widget in its parent panel.
-		 */
-		TMap<FString, TMap<FString, FString>> Widgets;
 	};
 
 	struct JSONBLUEPRINTSYNC_API FApplyResult
@@ -62,23 +39,45 @@ namespace JsonBlueprintSync
 		bool HasErrors() const { return Errors.Num() > 0; }
 	};
 
-	JSONBLUEPRINTSYNC_API EAssetKind GetAssetKind(const UObject* Asset);
+	/** Whether the object is a data asset (an instance of a UDataAsset subclass, native or Blueprint), the only kind that is synced. */
+	JSONBLUEPRINTSYNC_API bool IsDataAsset(const UObject* Asset);
 
 	/** Works without loading the asset, also for data assets whose class is a Blueprint. */
-	JSONBLUEPRINTSYNC_API EAssetKind GetAssetKind(const FAssetData& Asset);
+	JSONBLUEPRINTSYNC_API bool IsDataAsset(const FAssetData& Asset);
 
-	JSONBLUEPRINTSYNC_API const TCHAR* LexToString(EAssetKind Kind);
+	/**
+	 * The content roots whose data assets are synced: /Game and the mounted content of the project's own plugins, e.g. /MyPlugin.
+	 * Engine and engine plugin content is not synced. A plugin that is disabled is not mounted, so its JSON files are not checked.
+	 */
+	JSONBLUEPRINTSYNC_API TArray<FString> GetSyncedRoots();
+
+	/** Whether the package is under a synced root and not in a folder the ExcludedFolders setting leaves out. Temp packages never are. */
+	JSONBLUEPRINTSYNC_API bool IsSyncedPackage(const FString& PackageName);
+
+	/** Files and assets that lack their other half. */
+	struct JSONBLUEPRINTSYNC_API FMissingPairs
+	{
+		/** JSON files (full paths) under a synced root whose data asset does not exist, or whose asset is not a data asset. */
+		TArray<FString> JsonWithoutAsset;
+		/** Package names of synced data assets that have no JSON file. */
+		TArray<FString> AssetsWithoutJson;
+
+		bool IsEmpty() const { return JsonWithoutAsset.Num() == 0 && AssetsWithoutJson.Num() == 0; }
+	};
+
+	/** Compares the JSON files under the synced roots with the synced data assets the asset registry knows. Both lists are sorted. */
+	JSONBLUEPRINTSYNC_API FMissingPairs FindMissingPairs(const FString& JsonRoot);
 
 	/** JSON root folder: the JsonDir project setting, relative to the project dir. */
 	JSONBLUEPRINTSYNC_API FString GetDefaultJsonRoot();
 
-	/** /Game/A/BP_B -> <JsonRoot>/Game/A/BP_B.json */
+	/** /Game/A/DA_B -> <JsonRoot>/Game/A/DA_B.json */
 	JSONBLUEPRINTSYNC_API FString GetJsonPath(const FString& JsonRoot, const FString& PackageName);
 
 	/** Inverse of GetJsonPath. Returns false if the file is not under JsonRoot or is not a .json file. */
 	JSONBLUEPRINTSYNC_API bool GetPackageName(const FString& JsonRoot, const FString& JsonPath, FString& OutPackageName);
 
-	/** Reads the asset's current values. The asset must be of a synced kind. */
+	/** Reads the data asset's current values. */
 	JSONBLUEPRINTSYNC_API FAssetDefaults Capture(UObject* Asset);
 
 	/** Deterministic JSON: fixed top-level order, sorted keys, two-space indent, LF line endings, trailing newline. */
@@ -86,24 +85,23 @@ namespace JsonBlueprintSync
 
 	JSONBLUEPRINTSYNC_API bool FromJson(const FString& Json, FAssetDefaults& OutDoc, FString& OutError);
 
-	/** Key -> value for every value in the document: "Property", "Component.Property", "Widget.Property", "Widget.Slot.Property". */
+	/** Key -> value for every value in the document. */
 	JSONBLUEPRINTSYNC_API TMap<FString, FString> Flatten(const FAssetDefaults& Doc);
 
 	/** True if both documents hold the same values (the Asset and Parent fields are not compared). */
 	JSONBLUEPRINTSYNC_API bool ValuesEqual(const FAssetDefaults& A, const FAssetDefaults& B);
 
 	/**
-	 * Makes the asset's values match the document: keys in the document are set, values the asset overrides that the document does not
-	 * list are reset to the archetype. All values are validated first; on any error nothing is written. Each changed value is also copied
-	 * to archetype instances that were inheriting it (child Blueprint CDOs, data assets of a Blueprint class, loaded instances).
-	 * Does not compile, mark modified or save. Wrap in an FScopedTransaction in the editor.
+	 * Makes the data asset's values match the document: keys in the document are set, values the asset overrides that the document
+	 * does not list are reset to the class default. All values are validated first; on any error nothing is written.
+	 * Does not mark modified or save. Wrap in an FScopedTransaction in the editor.
 	 */
 	JSONBLUEPRINTSYNC_API FApplyResult Apply(UObject* Asset, const FAssetDefaults& Doc);
 
-	/** Apply, then MarkModified and, for Blueprints, compile if anything changed. Never saves. */
+	/** Apply, then MarkModified if anything changed. Never saves. */
 	JSONBLUEPRINTSYNC_API FApplyResult Import(UObject* Asset, const FAssetDefaults& Doc);
 
-	/** Blueprints: MarkBlueprintAsModified. Data assets: marks the package dirty. */
+	/** Marks the asset's package dirty. */
 	JSONBLUEPRINTSYNC_API void MarkModified(UObject* Asset);
 
 	/**
@@ -112,9 +110,6 @@ namespace JsonBlueprintSync
 	 * the others as they are in Dest.
 	 */
 	JSONBLUEPRINTSYNC_API bool ImportValue(const FProperty* Property, const FString& Text, void* Dest, UObject* Owner, FString& OutError);
-
-	/** Apply in ascending order: parent Blueprints before children, Blueprints before data assets (whose class may be one of them). */
-	JSONBLUEPRINTSYNC_API int32 GetApplyOrder(const UObject* Asset);
 
 	JSONBLUEPRINTSYNC_API FString NormalizeLineEndings(const FString& Text);
 
@@ -127,7 +122,7 @@ namespace JsonBlueprintSync
 	/** JSON files under the folder that mirrors Dir (e.g. /Game), as normalized paths, sorted. */
 	JSONBLUEPRINTSYNC_API TArray<FString> FindJsonFiles(const FString& JsonRoot, const FString& Dir);
 
-	/** Loads the main asset of a package such as /Game/A/BP_B. */
+	/** Loads the main asset of a package such as /Game/A/DA_B. */
 	JSONBLUEPRINTSYNC_API UObject* LoadAsset(const FString& PackageName);
 
 	/** MD5 of the UTF-8 text with normalized line endings. */

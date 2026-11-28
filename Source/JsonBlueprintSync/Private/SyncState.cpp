@@ -82,12 +82,12 @@ EBaseSource ChooseBase(const FBaseInputs& In)
 	}
 	if (!In.bJsonChanged)
 	{
-		// The file is what was synced last, so whatever differs was changed in the asset, even if it is dirty or reparented.
+		// The file is what was synced last, so whatever differs was changed in the asset, even if it is dirty or its class changed.
 		return EBaseSource::File;
 	}
 	if (In.bParentDiffers || In.bAssetChanged || In.bAssetDirty)
 	{
-		// Both sides moved since the last sync, or the JSON's values are relative to another parent.
+		// Both sides moved since the last sync, or the JSON's values are relative to another class.
 		return EBaseSource::None;
 	}
 	return EBaseSource::Current;
@@ -116,37 +116,13 @@ FAssetDefaults TakeKeys(const FAssetDefaults& Current, const FAssetDefaults& Sou
 	FAssetDefaults Result = Current;
 	for (const FString& Key : Keys)
 	{
-		FString Object, Property;
-		if (!Key.Split(TEXT("."), &Object, &Property, ESearchCase::CaseSensitive, ESearchDir::FromEnd))
+		if (const FString* Value = Source.Self.Find(Key))
 		{
-			if (const FString* Value = Source.Self.Find(Key))
-			{
-				Result.Self.Add(Key, *Value);
-			}
-			else
-			{
-				Result.Self.Remove(Key);
-			}
-			continue;
+			Result.Self.Add(Key, *Value);
 		}
-		// A Blueprint has components or widgets, never both, so an object name belongs to one section.
-		const bool bWidget = Source.Widgets.Contains(Object) || Current.Widgets.Contains(Object);
-		TMap<FString, TMap<FString, FString>>& ResultMaps = bWidget ? Result.Widgets : Result.Components;
-		const TMap<FString, TMap<FString, FString>>& SourceMaps = bWidget ? Source.Widgets : Source.Components;
-
-		const TMap<FString, FString>* SourceValues = SourceMaps.Find(Object);
-		const FString* Value = SourceValues ? SourceValues->Find(Property) : nullptr;
-		if (Value)
+		else
 		{
-			ResultMaps.FindOrAdd(Object).Add(Property, *Value);
-		}
-		else if (TMap<FString, FString>* Values = ResultMaps.Find(Object))
-		{
-			Values->Remove(Property);
-			if (Values->Num() == 0)
-			{
-				ResultMaps.Remove(Object);
-			}
+			Result.Self.Remove(Key);
 		}
 	}
 	return Result;

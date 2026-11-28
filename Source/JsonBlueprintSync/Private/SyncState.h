@@ -35,11 +35,11 @@ namespace JsonBlueprintSync
 
 	struct FKeyDiff
 	{
-		/** "Property", "Component.Property", "Widget.Property" or "Widget.Slot.Property". */
+		/** Property name. */
 		FString Key;
-		/** Unset if the key is not in the JSON: the archetype value. */
+		/** Unset if the key is not in the JSON: the class default. */
 		TOptional<FString> JsonValue;
-		/** Unset if the asset does not override the key: the archetype value. */
+		/** Unset if the asset does not override the key: the class default. */
 		TOptional<FString> AssetValue;
 		EKeyChange Change = EKeyChange::Both;
 
@@ -77,19 +77,19 @@ namespace JsonBlueprintSync
 		bool bAssetChanged = false;
 		/** The asset has unsaved edits. */
 		bool bAssetDirty = false;
-		/** The JSON names a different parent than the asset has, so its values are relative to another archetype. */
+		/** The JSON names a different class than the asset has, so its values are relative to other class defaults. */
 		bool bParentDiffers = false;
 	};
 
 	EBaseSource ChooseBase(const FBaseInputs& In);
 
 	/**
-	 * Whether Two Way may apply the JSON without asking: the base is known, the parents agree, no key conflicts, and the JSON
+	 * Whether Automatic mode may apply the JSON without asking: the base is known, the classes agree, no key conflicts, and the JSON
 	 * changed at least one key. A JSON that is only out of date (every key changed in the asset) is left for the user.
 	 */
 	bool CanAutoApply(bool bHasBase, bool bParentDiffers, const TArray<FKeyDiff>& Keys);
 
-	/** Current with the given keys taken from Source. A key that Source does not list is removed, i.e. reset to the archetype. */
+	/** Current with the given keys taken from Source. A key that Source does not list is removed, i.e. reset to the class default. */
 	FAssetDefaults TakeKeys(const FAssetDefaults& Current, const FAssetDefaults& Source, const TArray<FString>& Keys);
 
 	/**

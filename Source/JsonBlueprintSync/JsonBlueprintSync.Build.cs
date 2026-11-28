@@ -1,6 +1,6 @@
 using UnrealBuildTool;
 
-// Editor-only module: syncs Blueprint class defaults and data asset values with JSON files.
+// Editor-only module: syncs data asset values with JSON files.
 // See README.md in the plugin folder.
 public class JsonBlueprintSync : ModuleRules
 {
@@ -14,10 +14,11 @@ public class JsonBlueprintSync : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"UnrealEd",
+			// Only the tests use it, for the pin types of the Blueprint data asset classes they build.
 			"BlueprintGraph",
-			"Kismet",
-			"KismetCompiler",
 			"AssetRegistry",
+			// IPluginManager, for the content roots of the project's plugins.
+			"Projects",
 			"Json",
 			"JsonUtilities",
 			"EditorSubsystem",
@@ -26,9 +27,6 @@ public class JsonBlueprintSync : ModuleRules
 			"InputCore",
 			"ToolMenus",
 			"WorkspaceMenuStructure",
-			"UMG",
-			// Only the tests use it, to build Widget Blueprints; the library reads them through UnrealEd's UBaseWidgetBlueprint.
-			"UMGEditor",
 		});
 	}
 }

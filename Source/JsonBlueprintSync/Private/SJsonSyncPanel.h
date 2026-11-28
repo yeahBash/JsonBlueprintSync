@@ -30,7 +30,6 @@ public:
 	struct FAssetItem
 	{
 		FString PackageName;
-		JsonBlueprintSync::EAssetKind Kind = JsonBlueprintSync::EAssetKind::None;
 		FText Status;
 		bool bProblem = false;
 	};
@@ -83,6 +82,11 @@ private:
 	FReply OnRefreshClicked();
 	FReply OnApplyClicked(bool bSave);
 	FReply OnOverwriteClicked();
+	/** An asset that changed while its JSON did not: every key from the JSON. */
+	FReply OnApplyAllJsonClicked();
+	bool IsOutOfDateSelected() const;
+	/** The per-key controls are hidden for an asset that changed while its JSON did not; it gets Write JSON and Apply JSON. */
+	EVisibility GetKeyChoiceVisibility() const;
 	FReply OnBrowseClicked();
 	FReply OnSetAllClicked(EKeySource Source);
 
@@ -96,7 +100,7 @@ private:
 	FString SelectedError;
 	bool bSelectedHasBase = false;
 	bool bSelectedOutOfDate = false;
-	/** Set if the JSON was written for another parent or class than the asset has. */
+	/** Set if the JSON was written for another class than the asset has. */
 	FString SelectedJsonParent;
 	FString SelectedAssetParent;
 

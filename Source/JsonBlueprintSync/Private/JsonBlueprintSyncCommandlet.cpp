@@ -2,17 +2,14 @@
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
-#include "Engine/Blueprint.h"
 #include "Engine/DataAsset.h"
 #include "FileHelpers.h"
 #include "JsonBlueprintSync.h"
 #include "JsonBlueprintSyncModule.h"
-#include "JsonBlueprintSyncSettings.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "UObject/Package.h"
-#include "UObject/UObjectIterator.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(JsonBlueprintSyncCommandlet)
 
@@ -20,7 +17,7 @@ namespace
 {
 	using namespace JsonBlueprintSync;
 
-	/** Package names of the synced assets under Dir (Blueprints, Widget Blueprints, data assets; not those whose mode is None), sorted. */
+	/** Package names of the synced data assets under Dir (not those in an excluded folder), sorted. */
 	TArray<FString> FindSyncedPackages(const FString& Dir)
 	{
 		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
@@ -28,7 +25,6 @@ namespace
 		Registry.ScanPathsSynchronous({ Dir }, true);
 
 		FARFilter Filter;
-		Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
 		Filter.ClassPaths.Add(UDataAsset::StaticClass()->GetClassPathName());
 		Filter.bRecursiveClasses = true;
 		Filter.PackagePaths.Add(FName(*Dir));
@@ -37,7 +33,6 @@ namespace
 		TArray<FAssetData> Assets;
 		Registry.GetAssets(Filter, Assets);
 
-		const UJsonBlueprintSyncSettings* Settings = GetDefault<UJsonBlueprintSyncSettings>();
 		TArray<FString> Packages;
 		for (const FAssetData& Asset : Assets)
 		{
@@ -46,7 +41,7 @@ namespace
 			{
 				continue;
 			}
-			if (Settings->GetMode(GetAssetKind(Asset)) != EJsonSyncMode::None)
+			if (IsSyncedPackage(Asset.PackageName.ToString()))
 			{
 				Packages.AddUnique(Asset.PackageName.ToString());
 			}
@@ -144,7 +139,7 @@ namespace
 
 	int32 RunImport(const FString& JsonRoot, const FString& Dir, bool bSave)
 	{
-		// Also makes sure the asset registry knows the assets, so that loading resolves parents.
+		// Also makes sure the asset registry knows the assets, so that loading resolves Blueprint classes.
 		const TSet<FString> Synced(FindSyncedPackages(Dir));
 
 		int32 Failures = 0;
@@ -152,7 +147,6 @@ namespace
 		{
 			UObject* Asset;
 			FAssetDefaults Doc;
-			int32 Order;
 		};
 		TArray<FEntry> Entries;
 		for (const FString& File : FindJsonFiles(JsonRoot, Dir))
@@ -181,15 +175,14 @@ namespace
 			}
 			if (!Synced.Contains(PackageName))
 			{
-				UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s: skipped; %s is not synced (its mode is None)"), *File, *PackageName);
+				UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s: skipped; %s is not synced (not a data asset, or in an excluded folder)"), *File, *PackageName);
 				continue;
 			}
-			Entries.Add({ Asset, MoveTemp(Doc), GetApplyOrder(Asset) });
+			Entries.Add({ Asset, MoveTemp(Doc) });
 		}
-		// A child's values are a delta on its parent, and a data asset's on its class: parents go first.
-		Entries.StableSort([](const FEntry& A, const FEntry& B) { return A.Order < B.Order; });
 
 		int32 Changed = 0;
+		TArray<UPackage*> Dirty;
 		for (const FEntry& Entry : Entries)
 		{
 			const FString PackageName = Entry.Asset->GetPackage()->GetName();
@@ -210,34 +203,13 @@ namespace
 			if (Result.Changed.Num() > 0)
 			{
 				++Changed;
+				Dirty.AddUnique(Entry.Asset->GetPackage());
 				UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s: changed %s"), *PackageName, *FString::Join(Result.Changed, TEXT(", ")));
 			}
 		}
 
 		if (bSave)
 		{
-			// Save every dirty Blueprint and data asset package: the imported ones and the children the values propagated to.
-			TArray<UPackage*> Dirty;
-			const auto AddDirty = [&Dirty](const UObject* Object)
-			{
-				UPackage* Package = Object->GetPackage();
-				if (Package && Package->IsDirty() && !Package->HasAnyPackageFlags(PKG_CompiledIn | PKG_InMemoryOnly)
-					&& !FPackageName::IsTempPackage(Package->GetName()))
-				{
-					Dirty.AddUnique(Package);
-				}
-			};
-			for (TObjectIterator<UBlueprint> It; It; ++It)
-			{
-				AddDirty(*It);
-			}
-			for (TObjectIterator<UDataAsset> It; It; ++It)
-			{
-				if (!It->HasAnyFlags(RF_ClassDefaultObject))
-				{
-					AddDirty(*It);
-				}
-			}
 			if (Dirty.Num() > 0 && !UEditorLoadingAndSavingUtils::SavePackages(Dirty, true))
 			{
 				UE_LOG(LogJsonBlueprintSync, Error, TEXT("Saving the changed packages failed"));
@@ -257,8 +229,8 @@ UJsonBlueprintSyncCommandlet::UJsonBlueprintSyncCommandlet()
 	IsServer = false;
 	LogToConsole = true;
 	ShowErrorCount = true;
-	HelpDescription = TEXT("Syncs Blueprint class defaults and data asset values with JSON files. -import applies every JSON file whatever the "
-		"asset's mode (Write JSON Only included); assets whose mode is None are skipped.");
+	HelpDescription = TEXT("Syncs data asset values with JSON files. -import applies every JSON file whatever the mode; data assets in "
+		"excluded folders are skipped.");
 	HelpUsage = TEXT("-run=JsonBlueprintSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]");
 }
 
