@@ -330,7 +330,7 @@ The JSON files give a readable diff of the values a change sets. For the `.uasse
   the editor or the project's code and writes their stored values as merge text, one line per value. Its repository (private, as
   it is engine code) has the program, the scripts and the setup in its README.
 - **Merge**: merging two versions of an asset through that text, and applying the result in the editor, is the separate editor
-  plugin **UAssPainMerge** (https://github.com/yeahBash/UAssPainMerge).
+  plugin **UAssPainMerger** (https://github.com/yeahBash/UAssPainMerger).
 
 This plugin doesn't need either of them.
 
