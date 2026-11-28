@@ -1,1 +1,4 @@
 * text=auto
+
+# Shell scripts run in sh, which needs LF
+*.sh text eol=lf

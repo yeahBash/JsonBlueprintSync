@@ -322,6 +322,46 @@ UnrealEditor-Cmd.exe <Project>.uproject -run=JsonBlueprintSync -export|-import|-
 
 In Git Bash, set `MSYS_NO_PATHCONV=1` so `/Game/...` arguments are not turned into Windows paths.
 
+## Git diff for assets
+
+`Tools/uasset-textconv.sh` makes `git diff`, `git log -p` and other git commands that diff show the values stored in a `.uasset` or `.umap`
+instead of "Binary files differ". It runs UnrealAssetJson, a standalone program that reads asset files without the editor or the
+project's code, with `-merge`, and prints its merge text: one line per stored value, under a `[<object path>] <class>` line per
+object. Values the editor rebuilds on every compile or save, and the parts of the file outside the objects (header, tables,
+thumbnails), are a hash line each in an `[!ignored]` section at the end, so every change to the file shows.
+
+Setup, in each clone (local git config, so nothing machine-specific is committed):
+
+```
+git config unrealassetjson.path "D:/Path/To/UnrealAssetJson.exe"
+git config diff.unreal.textconv "sh <absolute path to>/Plugins/JsonBlueprintSync/Tools/uasset-textconv.sh"
+git config diff.unreal.cachetextconv true
+```
+
+and in `.gitattributes`, `diff=unreal` on the asset lines (Git LFS doesn't use the diff attribute):
+
+```
+*.uasset filter=lfs diff=unreal merge=lfs -text
+*.umap   filter=lfs diff=unreal merge=lfs -text
+```
+
+- Files stored with Git LFS are fetched from the local LFS store through `git lfs smudge`. If the object isn't available, the
+  diff shows the LFS pointer.
+- If UnrealAssetJson can't read a file, the diff shows the file's size and SHA-256 instead.
+- `cachetextconv` keeps the text of committed versions in `refs/notes/textconv/unreal`, so `git log -p` reads each version once.
+- In a clone without the setup, the assets diff as binary files, as before.
+
+TortoiseGit's diff doesn't use textconv. For it, `Tools/uasset-diff.js` converts both versions with `uasset-textconv.sh` and opens
+TortoiseGitMerge on the two texts (read-only). In **TortoiseGit > Settings > Diff Viewer > Advanced**, add `.uasset` and `.umap`
+with:
+
+```
+wscript.exe "<absolute path to>\Plugins\JsonBlueprintSync\Tools\uasset-diff.js" %base %mine %bname %yname //E:javascript
+```
+
+It needs the `unrealassetjson.path` setting above, and finds Git for Windows and TortoiseGitMerge through their install
+locations in the registry. If the conversion fails, a message box shows the error.
+
 ## Limitations
 
 - Only default values are stored. Graph logic, functions and variables themselves are not. For Widget Blueprints, the widget
