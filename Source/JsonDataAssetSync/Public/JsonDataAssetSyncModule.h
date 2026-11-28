@@ -3,15 +3,15 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleInterface.h"
 
-DECLARE_LOG_CATEGORY_EXTERN(LogJsonBlueprintSync, Log, All);
+DECLARE_LOG_CATEGORY_EXTERN(LogJsonDataAssetSync, Log, All);
 
-namespace JsonBlueprintSync
+namespace JsonDataAssetSync
 {
 	/** Id of the JSON Sync tab (Window > JSON Sync). */
-	inline FName GetSyncTabName() { return FName(TEXT("JsonBlueprintSync")); }
+	inline FName GetSyncTabName() { return FName(TEXT("JsonDataAssetSync")); }
 }
 
-class FJsonBlueprintSyncModule : public IModuleInterface
+class FJsonDataAssetSyncModule : public IModuleInterface
 {
 public:
 	virtual void StartupModule() override;

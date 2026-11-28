@@ -1,4 +1,4 @@
-# JsonBlueprintSync manual tests
+# JsonDataAssetSync manual tests
 
 A checklist for checking the plugin by hand in the editor and on the command line. The automated tests cover the library (capture,
 apply, format, merge, cache, missing pairs) and the rules for choosing a base and for applying automatically, but not the editor
@@ -30,7 +30,7 @@ Close the editor, or run them from a second shell while it is open (it is slower
 
 ```powershell
 & "<Engine>\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "$PWD\<Project>.uproject" `
-  -ExecCmds="Automation RunTests JsonBlueprintSync" -TestExit="Automation Test Queue Empty" -unattended -nullrhi -nosplash
+  -ExecCmds="Automation RunTests JsonDataAssetSync" -TestExit="Automation Test Queue Empty" -unattended -nullrhi -nosplash
 ```
 
 `-TestExit` quits once the tests have run. Do not add `Quit` to `-ExecCmds`: it runs before the tests, and the process hangs.
@@ -38,7 +38,7 @@ Close the editor, or run them from a second shell while it is open (it is slower
 Expected: 12 tests, each logging `Result={Success}`, and no `Result={Fail}`. The full log is in `Saved/Logs/<Project>.log`.
 To filter it: `Select-String -Path Saved\Logs\<Project>.log -Pattern "Result=\{"`.
 
-In the editor you can also run them from **Tools > Test Automation**: filter by `JsonBlueprintSync`, tick the group and press
+In the editor you can also run them from **Tools > Test Automation**: filter by `JsonDataAssetSync`, tick the group and press
 Start Tests.
 
 Some `Condition failed` lines may appear at startup. They come from the engine's own tests, not the plugin.
@@ -49,16 +49,16 @@ Some `Condition failed` lines may appear at startup. They come from the engine's
 
 | What | Where |
 |---|---|
-| JSON files | `<Project>/JsonBlueprintSync/Game/...` (setting `JsonDir`) |
-| Local cache | `<Project>/Saved/JsonBlueprintSync/cache.json` |
-| Base snapshots | `<Project>/Saved/JsonBlueprintSync/Base/Game/...` |
-| Log | Output Log, filtered by the category `LogJsonBlueprintSync` |
+| JSON files | `<Project>/JsonDataAssetSync/Game/...` (setting `JsonDir`) |
+| Local cache | `<Project>/Saved/JsonDataAssetSync/cache.json` |
+| Base snapshots | `<Project>/Saved/JsonDataAssetSync/Base/Game/...` |
+| Log | Output Log, filtered by the category `LogJsonDataAssetSync` |
 | Tab | **Window > JSON Sync**, or the JSON Sync entry in the status bar |
-| Rerun the check | **Refresh** in the tab, or the console command `JsonBlueprintSync.Sync` |
-| Settings | **Project Settings > Plugins > JSON Blueprint Sync** |
+| Rerun the check | **Refresh** in the tab, or the console command `JsonDataAssetSync.Sync` |
+| Settings | **Project Settings > Plugins > JSON Data Asset Sync** |
 
 Keep a text editor open on the JSON folder. Unless a test says otherwise, use the default settings (Mode Automatic, no Excluded
-Folders, `JsonDir` = `JsonBlueprintSync`). Section 3 switches to Manual.
+Folders, `JsonDir` = `JsonDataAssetSync`). Section 3 switches to Manual.
 
 ### Test assets
 
@@ -142,7 +142,7 @@ Expected:
 - The key `Damage` has JSON value `4.0`, Asset value `10.000000`, Changed in **JSON**, and Use **JSON** in blue (Asset would be
   green, Choose orange). The JSON value has a highlighted background; the asset value is dimmed. No conflict counter is shown, and
   **Apply** and **Apply and Save** are enabled. **Write JSON** and **Apply JSON** are not shown.
-- `cache.json` has `"pending": true` for the asset, and `Saved/JsonBlueprintSync/Base/.../DA_SyncItem.json` exists.
+- `cache.json` has `"pending": true` for the asset, and `Saved/JsonDataAssetSync/Base/.../DA_SyncItem.json` exists.
 
 2. Press **Apply**.
 
@@ -186,7 +186,7 @@ reads `"6.0"`. Press **Apply and Save** to finish.
 **3.4 JSON edited while the editor is open**
 
 1. With the editor open, change `Damage` in the JSON to `"7.0"`. Wait: nothing happens (there is no file watching).
-2. Press **Refresh** in the tab, or run `JsonBlueprintSync.Sync`.
+2. Press **Refresh** in the tab, or run `JsonDataAssetSync.Sync`.
 
 Expected: listed as in 3.1. Each further Refresh shows the toast again (known issue).
 
@@ -374,7 +374,7 @@ Expected: `Tint` is R 1, and G, B and A take the **class default's** values (Bla
 Expected: directly left of the unsaved assets entry (right of the Compile button), "All JSON Synced" with the merge icon. The
 tooltip says no asset has JSON changes.
 
-2. Change `Damage` in `DA_SyncItem.json` and press **Refresh** (or run `JsonBlueprintSync.Sync`).
+2. Change `Damage` in `DA_SyncItem.json` and press **Refresh** (or run `JsonDataAssetSync.Sync`).
 
 Expected: the entry turns yellow and reads "1 JSON to Review". Its tooltip lists `DA_SyncItem`.
 
@@ -491,7 +491,7 @@ Expected: applied automatically and saved, as in 5.1: the undo history starts em
 
 **6.1 Fresh machine (no cache)**
 
-1. Close the editor. Delete `Saved/JsonBlueprintSync/`. Change `Damage` in `DA_SyncItem.json`. Start the editor.
+1. Close the editor. Delete `Saved/JsonDataAssetSync/`. Change `Damage` in `DA_SyncItem.json`. Start the editor.
 
 Expected:
 
@@ -503,7 +503,7 @@ Expected:
 
 **6.2 Base deleted while pending**
 
-1. In Manual mode, with an asset listed with a base (3.4), delete its file under `Saved/JsonBlueprintSync/Base/`. Refresh.
+1. In Manual mode, with an asset listed with a base (3.4), delete its file under `Saved/JsonDataAssetSync/Base/`. Refresh.
 
 Expected: every key becomes Conflict.
 
@@ -517,7 +517,7 @@ Missing pairs are only reported: nothing is listed in the tab and nothing is cha
 
 Expected:
 
-- A warning toast "JSON Sync: 1 JSON files have no data asset. See the Output Log (LogJsonBlueprintSync) for how to fix each one."
+- A warning toast "JSON Sync: 1 JSON files have no data asset. See the Output Log (LogJsonDataAssetSync) for how to fix each one."
 - The log has a warning for the file: "no data asset for this JSON file. Delete the file if the asset was deleted on purpose, or
   restore the asset."
 - `DA_Missing` is not in the tab. The toast comes back on every Refresh and start until you delete the file (known issue).
@@ -576,7 +576,7 @@ came from outside. **All from Asset** and **Apply** resolve it. Report what you 
 
 1. Move `DA_SyncItem` to a subfolder.
 
-Expected: the JSON moves to the matching subfolder under `JsonBlueprintSync/Game/...`.
+Expected: the JSON moves to the matching subfolder under `JsonDataAssetSync/Game/...`.
 
 **8.4 Rename a folder**
 
@@ -645,16 +645,16 @@ Expected: both the `.uasset` and the JSON changed, so every key is **Conflict** 
 
 **9.5 `JsonDir`**
 
-1. Set `JsonDir` = `JsonBlueprintSyncTest`. Save `DA_SyncItem`.
+1. Set `JsonDir` = `JsonDataAssetSyncTest`. Save `DA_SyncItem`.
 
-Expected: `<Project>/JsonBlueprintSyncTest/Game/.../DA_SyncItem.json` is created and the old folder is left as it is. A Refresh
+Expected: `<Project>/JsonDataAssetSyncTest/Game/.../DA_SyncItem.json` is created and the old folder is left as it is. A Refresh
 reports every other data asset as missing its JSON. Set it back and delete the test folder.
 
 ## 10. PIE and line endings
 
 **10.1 PIE**
 
-1. Start Play In Editor. Run `JsonBlueprintSync.Sync`.
+1. Start Play In Editor. Run `JsonDataAssetSync.Sync`.
 
 Expected: a warning toast (yellow triangle) that JSON files are not checked during Play In Editor. Nothing else happens. The same
 for **Refresh** in the JSON Sync tab.
@@ -674,7 +674,7 @@ Close the editor first. `-import` saves packages, and the editor may have them l
 ```powershell
 $Editor = "<Engine>\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
 $Project = "$PWD\<Project>.uproject"
-& $Editor $Project -run=JsonBlueprintSync -verify -unattended -nosplash; "exit code: $LASTEXITCODE"
+& $Editor $Project -run=JsonDataAssetSync -verify -unattended -nosplash; "exit code: $LASTEXITCODE"
 ```
 
 **11.1 Export**
@@ -828,7 +828,7 @@ Expected: nothing is listed, and `cache.json` has the `"asset"` fields again.
 
 **13.1 Unreadable cache**
 
-1. Close the editor. Replace the contents of `Saved/JsonBlueprintSync/cache.json` with `not json`. Start.
+1. Close the editor. Replace the contents of `Saved/JsonDataAssetSync/cache.json` with `not json`. Start.
 
 Expected: an error toast "JSON Sync: cannot read …cache.json, so the last sync is unknown…". Assets whose JSON differs from the
 asset are listed with every key as Conflict. `cache.json` is valid again afterwards.
@@ -878,6 +878,6 @@ Expected: an error toast "JSON Sync: cannot delete … Is it open in another pro
 
 Expected: its JSON files are deleted as well.
 
-2. Delete any leftover test JSON files or folders (`DA_Missing.json`, `JsonBlueprintSyncTest/`, `Saved/JsonExportTest/`). Restore
+2. Delete any leftover test JSON files or folders (`DA_Missing.json`, `JsonDataAssetSyncTest/`, `Saved/JsonExportTest/`). Restore
    Project Settings (Mode Automatic, no Excluded Folders) and `Config/DefaultEditor.ini`. Delete the `.uasset` copies from
    sections 5 and 12.

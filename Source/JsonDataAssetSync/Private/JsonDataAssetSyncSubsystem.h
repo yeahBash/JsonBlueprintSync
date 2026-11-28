@@ -1,6 +1,6 @@
 #pragma once
 
-#include "JsonBlueprintSync.h"
+#include "JsonDataAssetSync.h"
 #include "Containers/Ticker.h"
 #include "CoreMinimal.h"
 #include "EditorSubsystem.h"
@@ -8,7 +8,7 @@
 #include "Misc/Guid.h"
 #include "SyncState.h"
 
-#include "JsonBlueprintSyncSubsystem.generated.h"
+#include "JsonDataAssetSyncSubsystem.generated.h"
 
 class SNotificationItem;
 class UPackage;
@@ -25,11 +25,11 @@ struct FAssetData;
  * - Undoing an Apply JSON from the tab puts the asset back in the JSON Sync tab; a JSON that changes again after it was reviewed is
  *   not overwritten.
  *
- * Not created in commandlets (use -run=JsonBlueprintSync there). Console command JsonBlueprintSync.Sync reruns the check,
+ * Not created in commandlets (use -run=JsonDataAssetSync there). Console command JsonDataAssetSync.Sync reruns the check,
  * e.g. after a git pull with the editor open.
  */
 UCLASS()
-class UJsonBlueprintSyncSubsystem : public UEditorSubsystem, public FEditorUndoClient
+class UJsonDataAssetSyncSubsystem : public UEditorSubsystem, public FEditorUndoClient
 {
 	GENERATED_BODY()
 
@@ -41,7 +41,7 @@ public:
 		/** Set if the JSON cannot be read or the asset cannot be loaded; then only Write JSON (OverwriteJson) is possible. */
 		FString Error;
 		/** Keys that differ between the JSON and the asset now. */
-		TArray<JsonBlueprintSync::FKeyDiff> Keys;
+		TArray<JsonDataAssetSync::FKeyDiff> Keys;
 		/** False if it is unknown which side changed what (every key is then a conflict). */
 		bool bHasBase = false;
 		/**
@@ -112,10 +112,10 @@ private:
 	struct FPending
 	{
 		/** Unset if the file cannot be parsed. */
-		TOptional<JsonBlueprintSync::FAssetDefaults> File;
+		TOptional<JsonDataAssetSync::FAssetDefaults> File;
 		FString Error;
 		/** The asset as it was when the JSON change was detected. Unset if unknown. */
-		TOptional<JsonBlueprintSync::FAssetDefaults> Base;
+		TOptional<JsonDataAssetSync::FAssetDefaults> Base;
 		/** Hash of the file that was compared, i.e. the one the user reviews. */
 		FString FileHash;
 	};
@@ -126,7 +126,7 @@ private:
 		/** Hash of the JSON as reviewed. If the file has another hash at the next save or sync, it changed after the review. */
 		FString FileHash;
 		/** The JSON as reviewed: the base if the file changes again before the save. Unset if unknown. */
-		TOptional<JsonBlueprintSync::FAssetDefaults> ReviewedFile;
+		TOptional<JsonDataAssetSync::FAssetDefaults> ReviewedFile;
 		/** The pending state before the apply, restored if the apply is undone. Unset for Write JSON. */
 		TOptional<FPending> Before;
 		/** The apply transaction that changed this asset. Invalid if it changed nothing in this asset, for an automatic apply and for Write JSON. */
@@ -190,7 +190,7 @@ private:
 	/** Deletes a JSON file. Shows a toast and returns false if it cannot be deleted (e.g. it is read-only). */
 	static bool DeleteJsonFile(const FString& Path);
 
-	JsonBlueprintSync::FSyncCache Cache;
+	JsonDataAssetSync::FSyncCache Cache;
 
 	/** The cache could not be read at start-up. Reported by the first sync, once the editor can show toasts. */
 	bool bCacheLoadFailed = false;

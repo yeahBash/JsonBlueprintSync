@@ -1,6 +1,6 @@
 #include "SyncState.h"
 
-#include "JsonBlueprintSync.h"
+#include "JsonDataAssetSync.h"
 #include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
@@ -9,7 +9,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 
-namespace JsonBlueprintSync
+namespace JsonDataAssetSync
 {
 namespace
 {
@@ -130,7 +130,7 @@ FAssetDefaults TakeKeys(const FAssetDefaults& Current, const FAssetDefaults& Sou
 
 FString FSyncCache::GetDefaultDir()
 {
-	return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("JsonBlueprintSync")));
+	return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("JsonDataAssetSync")));
 }
 
 bool FSyncCache::Load(const FString& InDir)

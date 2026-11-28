@@ -1,21 +1,21 @@
-#include "JsonBlueprintSyncCommandlet.h"
+#include "JsonDataAssetSyncCommandlet.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Engine/DataAsset.h"
 #include "FileHelpers.h"
-#include "JsonBlueprintSync.h"
-#include "JsonBlueprintSyncModule.h"
+#include "JsonDataAssetSync.h"
+#include "JsonDataAssetSyncModule.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "UObject/Package.h"
 
-#include UE_INLINE_GENERATED_CPP_BY_NAME(JsonBlueprintSyncCommandlet)
+#include UE_INLINE_GENERATED_CPP_BY_NAME(JsonDataAssetSyncCommandlet)
 
 namespace
 {
-	using namespace JsonBlueprintSync;
+	using namespace JsonDataAssetSync;
 
 	/** Package names of the synced data assets under Dir (not those in an excluded folder), sorted. */
 	TArray<FString> FindSyncedPackages(const FString& Dir)
@@ -61,7 +61,7 @@ namespace
 			UObject* Asset = LoadAsset(PackageName);
 			if (!Asset)
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: cannot load the asset"), *PackageName);
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("%s: cannot load the asset"), *PackageName);
 				++Failures;
 				continue;
 			}
@@ -71,13 +71,13 @@ namespace
 			bool bWritten = false;
 			if (!SaveFileIfChanged(Path, Capture(Asset), bWritten))
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: cannot write the file"), *Path);
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("%s: cannot write the file"), *Path);
 				++Failures;
 				continue;
 			}
 			if (bWritten)
 			{
-				UE_LOG(LogJsonBlueprintSync, Display, TEXT("Wrote %s"), *Path);
+				UE_LOG(LogJsonDataAssetSync, Display, TEXT("Wrote %s"), *Path);
 				++Written;
 			}
 		}
@@ -85,10 +85,10 @@ namespace
 		{
 			if (!Expected.Contains(File))
 			{
-				UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: no synced asset for this file"), *File);
+				UE_LOG(LogJsonDataAssetSync, Warning, TEXT("%s: no synced asset for this file"), *File);
 			}
 		}
-		UE_LOG(LogJsonBlueprintSync, Display, TEXT("Export: %d assets, %d files written, %d failures"), Packages.Num(), Written, Failures);
+		UE_LOG(LogJsonDataAssetSync, Display, TEXT("Export: %d assets, %d files written, %d failures"), Packages.Num(), Written, Failures);
 		return Failures > 0 ? 1 : 0;
 	}
 
@@ -105,7 +105,7 @@ namespace
 			UObject* Asset = LoadAsset(PackageName);
 			if (!Asset)
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: cannot load the asset"), *PackageName);
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("%s: cannot load the asset"), *PackageName);
 				++Failures;
 				continue;
 			}
@@ -113,7 +113,7 @@ namespace
 			FString Error;
 			if (!LoadFile(Path, OnDisk, Error))
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: %s"), *Path, Error.IsEmpty() ? TEXT("missing; run -export") : *Error);
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("%s: %s"), *Path, Error.IsEmpty() ? TEXT("missing; run -export") : *Error);
 				++Failures;
 				continue;
 			}
@@ -121,7 +121,7 @@ namespace
 			FFileHelper::LoadFileToString(Text, *Path);
 			if (!NormalizeLineEndings(Text).Equals(ToJson(Capture(Asset)), ESearchCase::CaseSensitive))
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: differs from %s; run -export or -import"), *Path, *PackageName);
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("%s: differs from %s; run -export or -import"), *Path, *PackageName);
 				++Failures;
 			}
 		}
@@ -129,11 +129,11 @@ namespace
 		{
 			if (!Expected.Contains(File))
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: no synced asset for this file"), *File);
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("%s: no synced asset for this file"), *File);
 				++Failures;
 			}
 		}
-		UE_LOG(LogJsonBlueprintSync, Display, TEXT("Verify: %d assets, %d failures"), Packages.Num(), Failures);
+		UE_LOG(LogJsonDataAssetSync, Display, TEXT("Verify: %d assets, %d failures"), Packages.Num(), Failures);
 		return Failures > 0 ? 1 : 0;
 	}
 
@@ -154,7 +154,7 @@ namespace
 			FString PackageName;
 			if (!GetPackageName(JsonRoot, File, PackageName))
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: not a valid asset path"), *File);
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("%s: not a valid asset path"), *File);
 				++Failures;
 				continue;
 			}
@@ -162,20 +162,20 @@ namespace
 			FString Error;
 			if (!LoadFile(File, Doc, Error))
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: %s"), *File, *Error);
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("%s: %s"), *File, *Error);
 				++Failures;
 				continue;
 			}
 			UObject* Asset = FPackageName::DoesPackageExist(PackageName) ? LoadAsset(PackageName) : nullptr;
 			if (!Asset)
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: no asset %s"), *File, *PackageName);
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("%s: no asset %s"), *File, *PackageName);
 				++Failures;
 				continue;
 			}
 			if (!Synced.Contains(PackageName))
 			{
-				UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s: skipped; %s is not synced (not a data asset, or in an excluded folder)"), *File, *PackageName);
+				UE_LOG(LogJsonDataAssetSync, Display, TEXT("%s: skipped; %s is not synced (not a data asset, or in an excluded folder)"), *File, *PackageName);
 				continue;
 			}
 			Entries.Add({ Asset, MoveTemp(Doc) });
@@ -189,11 +189,11 @@ namespace
 			const FApplyResult Result = Import(Entry.Asset, Entry.Doc);
 			for (const FString& Warning : Result.Warnings)
 			{
-				UE_LOG(LogJsonBlueprintSync, Warning, TEXT("%s: %s"), *PackageName, *Warning);
+				UE_LOG(LogJsonDataAssetSync, Warning, TEXT("%s: %s"), *PackageName, *Warning);
 			}
 			for (const FString& Error : Result.Errors)
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("%s: %s"), *PackageName, *Error);
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("%s: %s"), *PackageName, *Error);
 			}
 			if (Result.HasErrors())
 			{
@@ -204,7 +204,7 @@ namespace
 			{
 				++Changed;
 				Dirty.AddUnique(Entry.Asset->GetPackage());
-				UE_LOG(LogJsonBlueprintSync, Display, TEXT("%s: changed %s"), *PackageName, *FString::Join(Result.Changed, TEXT(", ")));
+				UE_LOG(LogJsonDataAssetSync, Display, TEXT("%s: changed %s"), *PackageName, *FString::Join(Result.Changed, TEXT(", ")));
 			}
 		}
 
@@ -212,17 +212,17 @@ namespace
 		{
 			if (Dirty.Num() > 0 && !UEditorLoadingAndSavingUtils::SavePackages(Dirty, true))
 			{
-				UE_LOG(LogJsonBlueprintSync, Error, TEXT("Saving the changed packages failed"));
+				UE_LOG(LogJsonDataAssetSync, Error, TEXT("Saving the changed packages failed"));
 				++Failures;
 			}
-			UE_LOG(LogJsonBlueprintSync, Display, TEXT("Saved %d packages"), Dirty.Num());
+			UE_LOG(LogJsonDataAssetSync, Display, TEXT("Saved %d packages"), Dirty.Num());
 		}
-		UE_LOG(LogJsonBlueprintSync, Display, TEXT("Import: %d files, %d assets changed, %d failures"), Entries.Num(), Changed, Failures);
+		UE_LOG(LogJsonDataAssetSync, Display, TEXT("Import: %d files, %d assets changed, %d failures"), Entries.Num(), Changed, Failures);
 		return Failures > 0 ? 1 : 0;
 	}
 }
 
-UJsonBlueprintSyncCommandlet::UJsonBlueprintSyncCommandlet()
+UJsonDataAssetSyncCommandlet::UJsonDataAssetSyncCommandlet()
 {
 	IsClient = false;
 	IsEditor = true;
@@ -231,17 +231,17 @@ UJsonBlueprintSyncCommandlet::UJsonBlueprintSyncCommandlet()
 	ShowErrorCount = true;
 	HelpDescription = TEXT("Syncs data asset values with JSON files. -import applies every JSON file whatever the mode; data assets in "
 		"excluded folders are skipped.");
-	HelpUsage = TEXT("-run=JsonBlueprintSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]");
+	HelpUsage = TEXT("-run=JsonDataAssetSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]");
 }
 
-int32 UJsonBlueprintSyncCommandlet::Main(const FString& Params)
+int32 UJsonDataAssetSyncCommandlet::Main(const FString& Params)
 {
 	const bool bExport = FParse::Param(*Params, TEXT("export"));
 	const bool bImport = FParse::Param(*Params, TEXT("import"));
 	const bool bVerify = FParse::Param(*Params, TEXT("verify"));
 	if (int32(bExport) + int32(bImport) + int32(bVerify) != 1)
 	{
-		UE_LOG(LogJsonBlueprintSync, Error, TEXT("Pass exactly one of -export, -import, -verify. Usage: %s"), *HelpUsage);
+		UE_LOG(LogJsonDataAssetSync, Error, TEXT("Pass exactly one of -export, -import, -verify. Usage: %s"), *HelpUsage);
 		return 1;
 	}
 
@@ -250,7 +250,7 @@ int32 UJsonBlueprintSyncCommandlet::Main(const FString& Params)
 	Dir.RemoveFromEnd(TEXT("/"));
 	if (!FPackageName::IsValidPath(Dir))
 	{
-		UE_LOG(LogJsonBlueprintSync, Error, TEXT("-dir=%s is not a content path such as /Game/Features"), *Dir);
+		UE_LOG(LogJsonDataAssetSync, Error, TEXT("-dir=%s is not a content path such as /Game/Features"), *Dir);
 		return 1;
 	}
 
@@ -261,7 +261,7 @@ int32 UJsonBlueprintSyncCommandlet::Main(const FString& Params)
 		JsonRoot = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), JsonDirOverride);
 		FPaths::NormalizeDirectoryName(JsonRoot);
 	}
-	UE_LOG(LogJsonBlueprintSync, Display, TEXT("Assets under %s, JSON under %s"), *Dir, *JsonRoot);
+	UE_LOG(LogJsonDataAssetSync, Display, TEXT("Assets under %s, JSON under %s"), *Dir, *JsonRoot);
 
 	if (bExport)
 	{

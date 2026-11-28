@@ -1,7 +1,7 @@
 #include "SJsonSyncStatusBar.h"
 
 #include "Editor.h"
-#include "JsonBlueprintSyncSubsystem.h"
+#include "JsonDataAssetSyncSubsystem.h"
 #include "Misc/PackageName.h"
 #include "Styling/AppStyle.h"
 #include "Styling/StyleColors.h"
@@ -10,16 +10,16 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
 
-#define LOCTEXT_NAMESPACE "JsonBlueprintSync"
+#define LOCTEXT_NAMESPACE "JsonDataAssetSync"
 
 namespace
 {
 	/** The tooltip lists this many assets, then "and N more". */
 	constexpr int32 MaxTooltipAssets = 10;
 
-	UJsonBlueprintSyncSubsystem* GetSubsystem()
+	UJsonDataAssetSyncSubsystem* GetSubsystem()
 	{
-		return GEditor ? GEditor->GetEditorSubsystem<UJsonBlueprintSyncSubsystem>() : nullptr;
+		return GEditor ? GEditor->GetEditorSubsystem<UJsonDataAssetSyncSubsystem>() : nullptr;
 	}
 }
 
@@ -34,7 +34,7 @@ void SJsonSyncStatusBar::Construct(const FArguments& InArgs)
 		.ToolTipText(this, &SJsonSyncStatusBar::GetTooltip)
 		.OnClicked_Lambda([]()
 		{
-			UJsonBlueprintSyncSubsystem::OpenSyncTab();
+			UJsonDataAssetSyncSubsystem::OpenSyncTab();
 			return FReply::Handled();
 		})
 		[
@@ -80,7 +80,7 @@ void SJsonSyncStatusBar::Register(void* Owner)
 
 int32 SJsonSyncStatusBar::GetPendingNum()
 {
-	const UJsonBlueprintSyncSubsystem* Subsystem = GetSubsystem();
+	const UJsonDataAssetSyncSubsystem* Subsystem = GetSubsystem();
 	return Subsystem ? Subsystem->GetPendingNum() : 0;
 }
 
@@ -94,7 +94,7 @@ FText SJsonSyncStatusBar::GetText() const
 
 FText SJsonSyncStatusBar::GetTooltip() const
 {
-	const UJsonBlueprintSyncSubsystem* Subsystem = GetSubsystem();
+	const UJsonDataAssetSyncSubsystem* Subsystem = GetSubsystem();
 	const TArray<FString> Packages = Subsystem ? Subsystem->GetPendingPackages() : TArray<FString>();
 	if (Packages.Num() == 0)
 	{

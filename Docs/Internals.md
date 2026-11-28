@@ -1,19 +1,19 @@
-# JsonBlueprintSync internals
+# JsonDataAssetSync internals
 
 How the plugin is built and how its parts work together, file by file, with the caveats and corner cases of each. For what the
 plugin does from a user's point of view, see [README.md](../README.md). To check it by hand, see [ManualTests.md](ManualTests.md).
 
 - [1. Overview](#1-overview)
 - [2. Files](#2-files)
-  - [2.1 JsonBlueprintSync.uplugin](#21-jsonblueprintsyncuplugin)
-  - [2.2 JsonBlueprintSync.Build.cs](#22-jsonblueprintsyncbuildcs)
-  - [2.3 Module: JsonBlueprintSyncModule](#23-module-jsonblueprintsyncmodule)
-  - [2.4 Settings: JsonBlueprintSyncSettings](#24-settings-jsonblueprintsyncsettings)
-  - [2.5 Library: JsonBlueprintSync](#25-library-jsonblueprintsync)
+  - [2.1 JsonDataAssetSync.uplugin](#21-jsondataassetsyncuplugin)
+  - [2.2 JsonDataAssetSync.Build.cs](#22-jsondataassetsyncbuildcs)
+  - [2.3 Module: JsonDataAssetSyncModule](#23-module-jsondataassetsyncmodule)
+  - [2.4 Settings: JsonDataAssetSyncSettings](#24-settings-jsondataassetsyncsettings)
+  - [2.5 Library: JsonDataAssetSync](#25-library-jsondataassetsync)
   - [2.6 Sync state: SyncState](#26-sync-state-syncstate)
-  - [2.7 Editor subsystem: JsonBlueprintSyncSubsystem](#27-editor-subsystem-jsonblueprintsyncsubsystem)
+  - [2.7 Editor subsystem: JsonDataAssetSyncSubsystem](#27-editor-subsystem-jsondataassetsyncsubsystem)
   - [2.8 The JSON Sync tab: SJsonSyncPanel](#28-the-json-sync-tab-sjsonsyncpanel)
-  - [2.9 Commandlet: JsonBlueprintSyncCommandlet](#29-commandlet-jsonblueprintsynccommandlet)
+  - [2.9 Commandlet: JsonDataAssetSyncCommandlet](#29-commandlet-jsondataassetsynccommandlet)
   - [2.10 Automation tests](#210-automation-tests)
 - [3. End-to-end flows](#3-end-to-end-flows)
 - [4. Life of one asset's sync state](#4-life-of-one-assets-sync-state)
@@ -22,26 +22,26 @@ plugin does from a user's point of view, see [README.md](../README.md). To check
 
 ## 1. Overview
 
-The plugin is a single editor module, `JsonBlueprintSync`. It is never built into a game target. It syncs **data assets** only, and
+The plugin is a single editor module, `JsonDataAssetSync`. It is never built into a game target. It syncs **data assets** only, and
 the JSON is the source of truth.
 
 ```
             ┌──────────────────┐        ┌───────────────────────────┐
-            │  SJsonSyncPanel  │───────▶│ UJsonBlueprintSyncSubsystem│◀── editor events: package saved,
+            │  SJsonSyncPanel  │───────▶│ UJsonDataAssetSyncSubsystem│◀── editor events: package saved,
             │  (Window > JSON  │◀───────│ (editor runtime, pending   │    asset renamed/removed,
             │   Sync tab)      │ OnPendingChanged  state, save guard)│    files loaded, console command
             └──────────────────┘        └─────────────┬─────────────┘
                                                       │
  ┌─────────────────────────────┐        ┌─────────────▼─────────────┐
- │ UJsonBlueprintSyncCommandlet│───────▶│ SyncState                 │  DiffKeys, TakeKeys, FSyncCache
- │ (-export / -import / -verify)│        │ (three-way diff, local    │  (Saved/JsonBlueprintSync/)
+ │ UJsonDataAssetSyncCommandlet│───────▶│ SyncState                 │  DiffKeys, TakeKeys, FSyncCache
+ │ (-export / -import / -verify)│        │ (three-way diff, local    │  (Saved/JsonDataAssetSync/)
  └──────────────┬──────────────┘        │  cache, base snapshots)   │
                 │                       └─────────────┬─────────────┘
                 │                       ┌─────────────▼─────────────┐
-                └──────────────────────▶│ JsonBlueprintSync library │  Capture, Apply, ToJson, FromJson,
+                └──────────────────────▶│ JsonDataAssetSync library │  Capture, Apply, ToJson, FromJson,
                                         │ (no state, no UI)         │  paths, roots, hashes, missing pairs
                                         └───────────────────────────┘
-        UJsonBlueprintSyncSettings (Project Settings, DefaultEditor.ini) is read by all of them.
+        UJsonDataAssetSyncSettings (Project Settings, DefaultEditor.ini) is read by all of them.
 ```
 
 The same data comes in three forms:
@@ -81,39 +81,39 @@ Terms used below:
 ## 2. Files
 
 ```
-JsonBlueprintSync.uplugin
-Source/JsonBlueprintSync/
-  JsonBlueprintSync.Build.cs
+JsonDataAssetSync.uplugin
+Source/JsonDataAssetSync/
+  JsonDataAssetSync.Build.cs
   Public/
-    JsonBlueprintSync.h              library API
-    JsonBlueprintSyncModule.h        module class, log category, tab id
-    JsonBlueprintSyncSettings.h      project settings
+    JsonDataAssetSync.h              library API
+    JsonDataAssetSyncModule.h        module class, log category, tab id
+    JsonDataAssetSyncSettings.h      project settings
   Private/
-    JsonBlueprintSync.cpp            library implementation
-    JsonBlueprintSyncModule.cpp      tab and status bar registration
-    JsonBlueprintSyncSettings.cpp
+    JsonDataAssetSync.cpp            library implementation
+    JsonDataAssetSyncModule.cpp      tab and status bar registration
+    JsonDataAssetSyncSettings.cpp
     SyncState.h / .cpp               three-way diff, merge, local cache
-    JsonBlueprintSyncSubsystem.h / .cpp   editor runtime
+    JsonDataAssetSyncSubsystem.h / .cpp   editor runtime
     SJsonSyncPanel.h / .cpp          the JSON Sync tab
     SJsonSyncStatusBar.h / .cpp      the status bar entry
-    JsonBlueprintSyncCommandlet.h / .cpp  -run=JsonBlueprintSync
-    Tests/JsonBlueprintSyncTests.cpp automation tests
+    JsonDataAssetSyncCommandlet.h / .cpp  -run=JsonDataAssetSync
+    Tests/JsonDataAssetSyncTests.cpp automation tests
 ```
 
-### 2.1 JsonBlueprintSync.uplugin
+### 2.1 JsonDataAssetSync.uplugin
 
 - One module, `Type: Editor`, `LoadingPhase: Default`.
 - `CanContainContent: false`: the plugin ships no assets.
 - The host project enables it with `"TargetAllowList": ["Editor"]`, so even a project that lists it never builds it into a game.
 
-### 2.2 JsonBlueprintSync.Build.cs
+### 2.2 JsonDataAssetSync.Build.cs
 
 Dependencies and why each is needed:
 
 | Module | Used for |
 |---|---|
 | Core, CoreUObject, Engine | everything |
-| DeveloperSettings (public) | `UJsonBlueprintSyncSettings` derives from `UDeveloperSettings` in a public header |
+| DeveloperSettings (public) | `UJsonDataAssetSyncSettings` derives from `UDeveloperSettings` in a public header |
 | UnrealEd | `FScopedTransaction`, `FEditorFileUtils`, `UEditorLoadingAndSavingUtils`, `GEditor` |
 | BlueprintGraph | only the tests use it, for the pin types of the Blueprint data asset classes they build |
 | AssetRegistry | asset lookup, class ancestry for unloaded Blueprint classes, rename and remove events, missing pairs |
@@ -124,13 +124,13 @@ Dependencies and why each is needed:
 | ToolMenus | adds the status bar entry (`LevelEditor.StatusBar.ToolBar`) |
 | WorkspaceMenuStructure | puts the tab under the Window menu |
 
-### 2.3 Module: JsonBlueprintSyncModule
+### 2.3 Module: JsonDataAssetSyncModule
 
-`JsonBlueprintSyncModule.h` declares:
+`JsonDataAssetSyncModule.h` declares:
 
-- the log category `LogJsonBlueprintSync`, which every message uses (filter the Output Log by it);
-- `JsonBlueprintSync::GetSyncTabName()`, the id `"JsonBlueprintSync"` of the tab;
-- `FJsonBlueprintSyncModule`.
+- the log category `LogJsonDataAssetSync`, which every message uses (filter the Output Log by it);
+- `JsonDataAssetSync::GetSyncTabName()`, the id `"JsonDataAssetSync"` of the tab;
+- `FJsonDataAssetSyncModule`.
 
 `StartupModule` registers a nomad tab spawner. The tab is titled "JSON Sync", is placed in the Level Editor group of the Window menu
 (`WorkspaceMenu::GetMenuStructure().GetLevelEditorCategory()`), and holds an `SJsonSyncPanel`. Registration is skipped in commandlets
@@ -148,24 +148,24 @@ only when shown. A click calls `OpenSyncTab`. Asset editors have their own statu
 Caveat: the editor remembers open tabs in its layout. If the plugin is disabled while the tab was open, the editor shows an empty
 "unrecognized tab" placeholder on next start. That is standard Unreal behaviour.
 
-### 2.4 Settings: JsonBlueprintSyncSettings
+### 2.4 Settings: JsonDataAssetSyncSettings
 
-`UJsonBlueprintSyncSettings` (`config = Editor, defaultconfig`) is shown in Project Settings > Plugins > JSON Blueprint Sync and
-saved to `Config/DefaultEditor.ini` under `[/Script/JsonBlueprintSync.JsonBlueprintSyncSettings]`, so it is shared through
+`UJsonDataAssetSyncSettings` (`config = Editor, defaultconfig`) is shown in Project Settings > Plugins > JSON Data Asset Sync and
+saved to `Config/DefaultEditor.ini` under `[/Script/JsonDataAssetSync.JsonDataAssetSyncSettings]`, so it is shared through
 source control.
 
 | Property | Default | Notes |
 |---|---|---|
-| `JsonDir` | `JsonBlueprintSync` | Relative to the project folder; an absolute path also works. Empty falls back to the default. |
+| `JsonDir` | `JsonDataAssetSync` | Relative to the project folder; an absolute path also works. Empty falls back to the default. |
 | `Mode` | `Automatic` | `EJsonSyncMode`: `Automatic` or `Manual`. Decides only what the start-up check (and Refresh) does with JSON changes. |
 | `ExcludedFolders` | empty | `TArray<FDirectoryPath>` with `LongPackageName`, so the picker offers content folders. |
 
 Every caller reads the settings at the moment it needs them, never once at start-up. A change in Project Settings therefore takes
 effect immediately: the next save, sync or rename uses the new mode, folder or exclusions.
 
-### 2.5 Library: JsonBlueprintSync
+### 2.5 Library: JsonDataAssetSync
 
-`Public/JsonBlueprintSync.h` and `Private/JsonBlueprintSync.cpp`. It holds no state and shows no UI: the subsystem, the commandlet
+`Public/JsonDataAssetSync.h` and `Private/JsonDataAssetSync.cpp`. It holds no state and shows no UI: the subsystem, the commandlet
 and the tests all build on it.
 
 #### Data assets
@@ -390,10 +390,10 @@ for the user whether to keep the asset's change (Write JSON) or revert it (Apply
 
 #### FSyncCache
 
-The cache is local state in `<ProjectSaved>/JsonBlueprintSync/`. It is never committed: each machine has its own.
+The cache is local state in `<ProjectSaved>/JsonDataAssetSync/`. It is never committed: each machine has its own.
 
 ```
-Saved/JsonBlueprintSync/
+Saved/JsonDataAssetSync/
   cache.json                      { "version": 2, "entries": { "/Game/A/DA_B": { "json": "<md5>", "asset": "<io hash>", "pending": true } } }
   Base/Game/A/DA_B.json           base snapshot of a pending asset (same format as the synced files)
 ```
@@ -424,9 +424,9 @@ the asset is pending: later checks reuse it instead of capturing again. That is 
 the detection as `Asset` or `Both`. It is deleted when the pending state ends. Deleting the `Base` folder by hand is safe: pending
 assets then show every key as a conflict.
 
-### 2.7 Editor subsystem: JsonBlueprintSyncSubsystem
+### 2.7 Editor subsystem: JsonDataAssetSyncSubsystem
 
-`UJsonBlueprintSyncSubsystem` is a `UEditorSubsystem`. `ShouldCreateSubsystem` returns false in commandlets, so the commandlet
+`UJsonDataAssetSyncSubsystem` is a `UEditorSubsystem`. `ShouldCreateSubsystem` returns false in commandlets, so the commandlet
 and the subsystem never run together.
 
 #### State
@@ -452,7 +452,7 @@ and the subsystem never run together.
 3. If the registry is still scanning, waits for `OnFilesLoaded`. Otherwise it waits one tick. Either way it then calls
    `SyncFromJson`.
 4. Registers for undo and redo (`GEditor->RegisterForUndo`; the subsystem is an `FEditorUndoClient`).
-5. Registers the console command `JsonBlueprintSync.Sync` (→ `SyncFromJson`).
+5. Registers the console command `JsonDataAssetSync.Sync` (→ `SyncFromJson`).
 6. Logs the synced roots and the JSON root.
 
 `OnFilesLoaded` shows the error toast for an unreadable cache, if any, then calls `SyncFromJson`.
@@ -461,7 +461,7 @@ and the subsystem never run together.
 
 #### SyncFromJson: the start-up check
 
-This runs at start-up, on `JsonBlueprintSync.Sync` and on the tab's Refresh button.
+This runs at start-up, on `JsonDataAssetSync.Sync` and on the tab's Refresh button.
 
 1. Refuses during Play In Editor, with a warning toast.
 2. For every JSON file under `<JsonRoot>/<root>` for each synced root:
@@ -500,7 +500,7 @@ This runs at start-up, on `JsonBlueprintSync.Sync` and on the tab's Refresh butt
    bring back the old values and let the next save write them over the JSON. The undo-history check is what makes that safe.
    Changing an object outside a transaction while an older transaction holds it would break undo: undoing or redoing that
    transaction restores the object's state from before the apply, so the applied values would be lost and the next save would
-   write the old ones. At editor start the history is empty, so the check matters only for a Refresh or `JsonBlueprintSync.Sync`
+   write the old ones. At editor start the history is empty, so the check matters only for a Refresh or `JsonDataAssetSync.Sync`
    later in the session. An asset whose tab apply was undone is caught by it too (the apply is a redo step, or sits under the edits
    made since), so there is no separate check for `Undone`.
 
@@ -769,9 +769,9 @@ Caveats:
   refresh if the asset value changed.
 - Using JSON for a key whose values have meanwhile become equal does no harm: `Apply` finds the value identical and skips it.
 
-### 2.9 Commandlet: JsonBlueprintSyncCommandlet
+### 2.9 Commandlet: JsonDataAssetSyncCommandlet
 
-`UnrealEditor-Cmd.exe <Project>.uproject -run=JsonBlueprintSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]`
+`UnrealEditor-Cmd.exe <Project>.uproject -run=JsonDataAssetSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]`
 
 `Main` requires exactly one action and a valid content path for `-dir` (default `/Game`; a trailing slash is removed). `-jsondir`
 overrides the setting, relative to the project folder.
@@ -798,7 +798,7 @@ Caveats:
 
 ### 2.10 Automation tests
 
-`Private/Tests/JsonBlueprintSyncTests.cpp` holds 12 tests under `JsonBlueprintSync.*`. They are compiled only with
+`Private/Tests/JsonDataAssetSyncTests.cpp` holds 12 tests under `JsonDataAssetSync.*`. They are compiled only with
 `WITH_DEV_AUTOMATION_TESTS`. `FTestData` builds a Blueprint data asset class (a subclass of `UPrimaryDataAsset` with a double, a
 linear colour, an int array and a class-only variable) and a data asset of it, in `/Temp` packages, so they never touch project
 content or the JSON folder. `MissingPairs` uses a JSON folder of its own under `Saved/` and deletes it afterwards.
@@ -860,7 +860,7 @@ If the teammate committed both but they disagree, both hashes changed: pending w
 
 The plugin does not watch files. Nothing happens until one of these:
 
-- **Refresh** (or `JsonBlueprintSync.Sync`): same as start-up.
+- **Refresh** (or `JsonDataAssetSync.Sync`): same as start-up.
 - **Saving the asset**: the save guard sees a hash it does not know and does not overwrite the file. If values differ, the asset
   becomes pending without a base.
 
@@ -927,7 +927,7 @@ is never skipped by the hash check.
 
 **Detection**
 
-- *Fresh clone, or `Saved/JsonBlueprintSync` deleted*: there is no cache, so every JSON file is compared at the next start, which
+- *Fresh clone, or `Saved/JsonDataAssetSync` deleted*: there is no cache, so every JSON file is compared at the next start, which
   loads every synced asset once. Files that match are recorded. Files that differ are pending **without a base**, all keys
   Conflict, and nothing is applied automatically.
 - *JSON file deleted, asset kept*: reported as a data asset without its JSON at every sync, until the asset is saved (which writes

@@ -1,12 +1,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "JsonBlueprintSync.h"
+#include "JsonDataAssetSync.h"
 #include "SyncState.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/SListView.h"
 
-class UJsonBlueprintSyncSubsystem;
+class UJsonDataAssetSyncSubsystem;
 
 /**
  * The JSON Sync tab, a merge view: assets whose JSON has changes that are not applied, and for the selected one the keys that differ.
@@ -36,7 +36,7 @@ public:
 
 	struct FKeyItem
 	{
-		JsonBlueprintSync::FKeyDiff Diff;
+		JsonDataAssetSync::FKeyDiff Diff;
 		EKeySource Source = EKeySource::None;
 	};
 
@@ -44,7 +44,7 @@ public:
 	virtual ~SJsonSyncPanel() override;
 
 	/** The side a key starts with: the side that changed it, or None for a conflict. */
-	static EKeySource GetDefaultSource(const JsonBlueprintSync::FKeyDiff& Diff);
+	static EKeySource GetDefaultSource(const JsonDataAssetSync::FKeyDiff& Diff);
 
 private:
 	/** A source the user chose, with the values it was chosen for. If either value changes, the choice is dropped. */
@@ -55,7 +55,7 @@ private:
 		TOptional<FString> AssetValue;
 	};
 
-	UJsonBlueprintSyncSubsystem* GetSubsystem() const;
+	UJsonDataAssetSyncSubsystem* GetSubsystem() const;
 
 	/** Rebuilds both lists from the subsystem, keeping the selection and the choices for keys whose values have not changed. */
 	void Refresh();
@@ -107,7 +107,7 @@ private:
 	/** The user's choices by package and key, so that switching assets or a refresh keeps them. */
 	TMap<FString, TMap<FString, FKeyChoice>> Choices;
 
-	TWeakObjectPtr<UJsonBlueprintSyncSubsystem> Subsystem;
+	TWeakObjectPtr<UJsonDataAssetSyncSubsystem> Subsystem;
 	FDelegateHandle PendingChangedHandle;
 	bool bRefreshing = false;
 };

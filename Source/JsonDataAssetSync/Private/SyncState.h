@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 
-namespace JsonBlueprintSync
+namespace JsonDataAssetSync
 {
 	struct FAssetDefaults;
 
@@ -100,7 +100,7 @@ namespace JsonBlueprintSync
 	class FSyncCache
 	{
 	public:
-		/** <ProjectSavedDir>/JsonBlueprintSync */
+		/** <ProjectSavedDir>/JsonDataAssetSync */
 		static FString GetDefaultDir();
 
 		/**

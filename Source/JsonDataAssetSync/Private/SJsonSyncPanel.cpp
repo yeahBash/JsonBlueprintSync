@@ -5,7 +5,7 @@
 #include "Editor.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "InputCoreTypes.h"
-#include "JsonBlueprintSyncSubsystem.h"
+#include "JsonDataAssetSyncSubsystem.h"
 #include "Misc/PackageName.h"
 #include "Styling/AppStyle.h"
 #include "Styling/StyleColors.h"
@@ -19,9 +19,9 @@
 #include "Widgets/Views/SHeaderRow.h"
 #include "Widgets/Views/STableRow.h"
 
-#define LOCTEXT_NAMESPACE "JsonBlueprintSync"
+#define LOCTEXT_NAMESPACE "JsonDataAssetSync"
 
-using namespace JsonBlueprintSync;
+using namespace JsonDataAssetSync;
 
 namespace
 {
@@ -307,7 +307,7 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 			[
 				SNew(SButton)
 				.Text(LOCTEXT("Refresh", "Refresh"))
-				.ToolTipText(LOCTEXT("RefreshTip", "Check the JSON files again, e.g. after a git pull (same as the console command JsonBlueprintSync.Sync)"))
+				.ToolTipText(LOCTEXT("RefreshTip", "Check the JSON files again, e.g. after a git pull (same as the console command JsonDataAssetSync.Sync)"))
 				.OnClicked(this, &SJsonSyncPanel::OnRefreshClicked)
 			]
 		]
@@ -492,21 +492,21 @@ void SJsonSyncPanel::Construct(const FArguments& InArgs)
 
 SJsonSyncPanel::~SJsonSyncPanel()
 {
-	if (UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get())
+	if (UJsonDataAssetSyncSubsystem* Owner = Subsystem.Get())
 	{
 		Owner->OnPendingChanged.Remove(PendingChangedHandle);
 	}
 }
 
-UJsonBlueprintSyncSubsystem* SJsonSyncPanel::GetSubsystem() const
+UJsonDataAssetSyncSubsystem* SJsonSyncPanel::GetSubsystem() const
 {
-	return GEditor ? GEditor->GetEditorSubsystem<UJsonBlueprintSyncSubsystem>() : nullptr;
+	return GEditor ? GEditor->GetEditorSubsystem<UJsonDataAssetSyncSubsystem>() : nullptr;
 }
 
 void SJsonSyncPanel::Refresh()
 {
 	TGuardValue<bool> Guard(bRefreshing, true);
-	UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get();
+	UJsonDataAssetSyncSubsystem* Owner = Subsystem.Get();
 
 	AssetItems.Reset();
 	TSharedPtr<FAssetItem> ToSelect;
@@ -515,7 +515,7 @@ void SJsonSyncPanel::Refresh()
 	{
 		for (const FString& PackageName : Owner->GetPendingPackages())
 		{
-			UJsonBlueprintSyncSubsystem::FPendingView View;
+			UJsonDataAssetSyncSubsystem::FPendingView View;
 			if (!Owner->GetPendingView(PackageName, View))
 			{
 				continue;
@@ -588,8 +588,8 @@ void SJsonSyncPanel::RefreshKeys()
 	SelectedJsonParent.Reset();
 	SelectedAssetParent.Reset();
 
-	UJsonBlueprintSyncSubsystem::FPendingView View;
-	UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get();
+	UJsonDataAssetSyncSubsystem::FPendingView View;
+	UJsonDataAssetSyncSubsystem* Owner = Subsystem.Get();
 	if (Owner && !SelectedPackage.IsEmpty() && Owner->GetPendingView(SelectedPackage, View))
 	{
 		SelectedError = View.Error;
@@ -789,7 +789,7 @@ bool SJsonSyncPanel::CanApply() const
 
 FReply SJsonSyncPanel::OnRefreshClicked()
 {
-	if (UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get())
+	if (UJsonDataAssetSyncSubsystem* Owner = Subsystem.Get())
 	{
 		// Broadcasts OnPendingChanged, which refreshes this panel.
 		Owner->SyncFromJson();
@@ -811,7 +811,7 @@ FReply SJsonSyncPanel::OnApplyClicked(bool bSave)
 			Keys.Add(Item->Diff.Key);
 		}
 	}
-	if (UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get())
+	if (UJsonDataAssetSyncSubsystem* Owner = Subsystem.Get())
 	{
 		const FString PackageName = SelectedPackage;
 		Owner->ApplyJson(PackageName, Keys, bSave);
@@ -821,7 +821,7 @@ FReply SJsonSyncPanel::OnApplyClicked(bool bSave)
 
 FReply SJsonSyncPanel::OnOverwriteClicked()
 {
-	if (UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get())
+	if (UJsonDataAssetSyncSubsystem* Owner = Subsystem.Get())
 	{
 		Owner->OverwriteJson(SelectedPackage);
 	}
@@ -849,7 +849,7 @@ FReply SJsonSyncPanel::OnApplyAllJsonClicked()
 	{
 		Keys.Add(Item->Diff.Key);
 	}
-	if (UJsonBlueprintSyncSubsystem* Owner = Subsystem.Get())
+	if (UJsonDataAssetSyncSubsystem* Owner = Subsystem.Get())
 	{
 		const FString PackageName = SelectedPackage;
 		Owner->ApplyJson(PackageName, Keys, false);

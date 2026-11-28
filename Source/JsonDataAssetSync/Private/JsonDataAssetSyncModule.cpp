@@ -1,4 +1,4 @@
-#include "JsonBlueprintSyncModule.h"
+#include "JsonDataAssetSyncModule.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
@@ -11,17 +11,17 @@
 #include "WorkspaceMenuStructure.h"
 #include "WorkspaceMenuStructureModule.h"
 
-DEFINE_LOG_CATEGORY(LogJsonBlueprintSync);
+DEFINE_LOG_CATEGORY(LogJsonDataAssetSync);
 
-#define LOCTEXT_NAMESPACE "JsonBlueprintSync"
+#define LOCTEXT_NAMESPACE "JsonDataAssetSync"
 
-void FJsonBlueprintSyncModule::StartupModule()
+void FJsonDataAssetSyncModule::StartupModule()
 {
 	if (IsRunningCommandlet() || !FSlateApplication::IsInitialized())
 	{
 		return;
 	}
-	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(JsonBlueprintSync::GetSyncTabName(), FOnSpawnTab::CreateLambda([](const FSpawnTabArgs&)
+	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(JsonDataAssetSync::GetSyncTabName(), FOnSpawnTab::CreateLambda([](const FSpawnTabArgs&)
 		{
 			return SNew(SDockTab)
 				.TabRole(ETabRole::NomadTab)
@@ -41,7 +41,7 @@ void FJsonBlueprintSyncModule::StartupModule()
 	}));
 }
 
-void FJsonBlueprintSyncModule::ShutdownModule()
+void FJsonDataAssetSyncModule::ShutdownModule()
 {
 	if (bTabRegistered && UObjectInitialized() && UToolMenus::TryGet())
 	{
@@ -50,11 +50,11 @@ void FJsonBlueprintSyncModule::ShutdownModule()
 	}
 	if (bTabRegistered && FSlateApplication::IsInitialized())
 	{
-		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(JsonBlueprintSync::GetSyncTabName());
+		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(JsonDataAssetSync::GetSyncTabName());
 	}
 	bTabRegistered = false;
 }
 
 #undef LOCTEXT_NAMESPACE
 
-IMPLEMENT_MODULE(FJsonBlueprintSyncModule, JsonBlueprintSync);
+IMPLEMENT_MODULE(FJsonDataAssetSyncModule, JsonDataAssetSync);

@@ -2,9 +2,9 @@ using UnrealBuildTool;
 
 // Editor-only module: syncs data asset values with JSON files.
 // See README.md in the plugin folder.
-public class JsonBlueprintSync : ModuleRules
+public class JsonDataAssetSync : ModuleRules
 {
-	public JsonBlueprintSync(ReadOnlyTargetRules Target) : base(Target)
+	public JsonDataAssetSync(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 

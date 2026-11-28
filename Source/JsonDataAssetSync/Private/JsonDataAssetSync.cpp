@@ -1,7 +1,7 @@
-#include "JsonBlueprintSync.h"
+#include "JsonDataAssetSync.h"
 
-#include "JsonBlueprintSyncModule.h"
-#include "JsonBlueprintSyncSettings.h"
+#include "JsonDataAssetSyncModule.h"
+#include "JsonDataAssetSyncSettings.h"
 #include "AssetRegistry/ARFilter.h"
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -22,7 +22,7 @@
 #include "UObject/SoftObjectPath.h"
 #include "UObject/UnrealType.h"
 
-namespace JsonBlueprintSync
+namespace JsonDataAssetSync
 {
 namespace
 {
@@ -373,7 +373,7 @@ bool IsSyncedPackage(const FString& PackageName)
 	{
 		return false;
 	}
-	for (const FDirectoryPath& Excluded : GetDefault<UJsonBlueprintSyncSettings>()->ExcludedFolders)
+	for (const FDirectoryPath& Excluded : GetDefault<UJsonDataAssetSyncSettings>()->ExcludedFolders)
 	{
 		if (IsUnderFolder(PackageName, TrimFolder(Excluded.Path)))
 		{
@@ -444,10 +444,10 @@ FMissingPairs FindMissingPairs(const FString& JsonRoot)
 
 FString GetDefaultJsonRoot()
 {
-	FString Dir = GetDefault<UJsonBlueprintSyncSettings>()->JsonDir;
+	FString Dir = GetDefault<UJsonDataAssetSyncSettings>()->JsonDir;
 	if (Dir.IsEmpty())
 	{
-		Dir = TEXT("JsonBlueprintSync");
+		Dir = TEXT("JsonDataAssetSync");
 	}
 	FString Full = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), Dir);
 	FPaths::NormalizeDirectoryName(Full);
@@ -535,7 +535,7 @@ bool FromJson(const FString& Json, FAssetDefaults& OutDoc, FString& OutError)
 	if (!Root->TryGetNumberField(TEXT("schema"), Schema) || Schema != FAssetDefaults::SchemaVersion)
 	{
 		OutError = Schema > 0 && Schema < FAssetDefaults::SchemaVersion
-			? FString::Printf(TEXT("schema %d is from an older version of the plugin; re-export the file (save the asset, or run -run=JsonBlueprintSync -export)"), Schema)
+			? FString::Printf(TEXT("schema %d is from an older version of the plugin; re-export the file (save the asset, or run -run=JsonDataAssetSync -export)"), Schema)
 			: FString::Printf(TEXT("'schema' must be %d"), FAssetDefaults::SchemaVersion);
 		return false;
 	}

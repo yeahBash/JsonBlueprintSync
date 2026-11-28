@@ -1,4 +1,4 @@
-# JsonBlueprintSync
+# JsonDataAssetSync
 
 An Unreal Engine editor plugin that keeps the values of **data assets** in JSON files next to the project. **The JSON is the
 source of truth**: the `.uasset` follows it.
@@ -23,7 +23,7 @@ Blueprints and Widget Blueprints are not synced.
 1. Add the plugin to the project's `Plugins/` folder, for example as a git submodule:
 
    ```
-   git submodule add https://github.com/yeahBash/JsonBlueprintSync.git Plugins/JsonBlueprintSync
+   git submodule add https://github.com/yeahBash/JsonBlueprintSync.git Plugins/JsonDataAssetSync
    ```
 
    Teammates then need `git clone --recurse-submodules`, or `git submodule update --init` in an existing clone.
@@ -32,7 +32,7 @@ Blueprints and Widget Blueprints are not synced.
 
    ```json
    "Plugins": [
-     { "Name": "JsonBlueprintSync", "Enabled": true, "TargetAllowList": [ "Editor" ] }
+     { "Name": "JsonDataAssetSync", "Enabled": true, "TargetAllowList": [ "Editor" ] }
    ]
    ```
 
@@ -45,15 +45,34 @@ Blueprints and Widget Blueprints are not synced.
    Files are compared byte for byte, and CRLF checkouts on Windows would otherwise show every file as changed.
 
 4. Write the JSON of the existing data assets once, with the commandlet's `-export` (see below), and commit the JSON folder
-   (`<Project>/JsonBlueprintSync/` by default) alongside the assets.
+   (`<Project>/JsonDataAssetSync/` by default) alongside the assets.
+
+### Upgrading from JsonBlueprintSync
+
+The plugin used to be called JsonBlueprintSync and also synced Blueprints and Widget Blueprints. To upgrade, with the editor
+closed:
+
+1. Rename the plugin folder to `Plugins/JsonDataAssetSync/` (for a submodule, `git mv`) and the `.uproject` entry to
+   `JsonDataAssetSync`. Delete the plugin's old `Binaries/` and `Intermediate/` folders.
+2. Rename the JSON folder `JsonBlueprintSync/` to `JsonDataAssetSync/`, or keep it by setting `JsonDir=JsonBlueprintSync`.
+3. Move the settings in `Config/DefaultEditor.ini` from `[/Script/JsonBlueprintSync.JsonBlueprintSyncSettings]` to
+   `[/Script/JsonDataAssetSync.JsonDataAssetSyncSettings]`. The per-type modes (`Blueprints`, `WidgetBlueprints`, `DataAssets`)
+   are gone; there is one `Mode`.
+4. To keep the local sync state, rename `Saved/JsonBlueprintSync/` to `Saved/JsonDataAssetSync/` on each machine. Without it, the
+   first start compares every JSON file once and lists the changed ones with every key as a conflict.
+5. The console command is now `JsonDataAssetSync.Sync`, the commandlet `-run=JsonDataAssetSync` and the log category
+   `LogJsonDataAssetSync`.
+
+The JSON files of Blueprints and Widget Blueprints are no longer read. They are reported as JSON files without their data asset
+until you delete them.
 
 ### Prebuilt copy for Blueprint-only projects
 
 ```
-<Engine>\Engine\Build\BatchFiles\RunUAT.bat BuildPlugin -Plugin="<path>\JsonBlueprintSync.uplugin" -Package="<output folder>" -TargetPlatforms=Win64
+<Engine>\Engine\Build\BatchFiles\RunUAT.bat BuildPlugin -Plugin="<path>\JsonDataAssetSync.uplugin" -Package="<output folder>" -TargetPlatforms=Win64
 ```
 
-Copy the output folder to the project's `Plugins/JsonBlueprintSync/`. Binaries only work with the engine version they were built with.
+Copy the output folder to the project's `Plugins/JsonDataAssetSync/`. Binaries only work with the engine version they were built with.
 
 ## What is synced
 
@@ -66,7 +85,7 @@ Copy the output folder to the project's `Plugins/JsonBlueprintSync/`. Binaries o
 
 ## Modes
 
-Set in **Project Settings > Plugins > JSON Blueprint Sync**. Saving a data asset writes its JSON in both modes.
+Set in **Project Settings > Plugins > JSON Data Asset Sync**. Saving a data asset writes its JSON in both modes.
 
 | Mode | JSON changed on disk |
 |---|---|
@@ -79,7 +98,7 @@ write them over a teammate's change. To back out a JSON change, edit the values 
 file in source control. If the save does not happen (e.g. you decline the checkout), a warning says so and the asset is left
 modified: save it yourself.
 
-Two checks keep this safe. They matter only for a Refresh or `JsonBlueprintSync.Sync` later in the session; at editor start
+Two checks keep this safe. They matter only for a Refresh or `JsonDataAssetSync.Sync` later in the session; at editor start
 neither applies. An asset is not applied automatically, but listed in the JSON Sync tab with a log line, if:
 
 - it has unsaved changes, because the automatic save would save them too;
@@ -92,7 +111,7 @@ below.
 ## JSON format
 
 One file per data asset, at `<JsonDir>/<package path>.json`. For example, `/Game/Features/Light/DA_Lamp` maps to
-`JsonBlueprintSync/Game/Features/Light/DA_Lamp.json`, and `/MyPlugin/DA_Lamp` to `JsonBlueprintSync/MyPlugin/DA_Lamp.json`.
+`JsonDataAssetSync/Game/Features/Light/DA_Lamp.json`, and `/MyPlugin/DA_Lamp` to `JsonDataAssetSync/MyPlugin/DA_Lamp.json`.
 
 ```json
 {
@@ -127,7 +146,7 @@ Applying a value does not change other assets: data assets have no children.
 
 ## Syncing in the editor
 
-`UJsonBlueprintSyncSubsystem` handles syncing while the editor runs:
+`UJsonDataAssetSyncSubsystem` handles syncing while the editor runs:
 
 | Event | What happens |
 |---|---|
@@ -136,12 +155,12 @@ Applying a value does not change other assets: data assets have no children.
 | Data asset renamed | The JSON file moves with it. |
 | Data asset deleted | The JSON file is deleted. |
 
-The console command `JsonBlueprintSync.Sync` reruns the start-up check, e.g. after a `git pull` with the editor open. Nothing is
+The console command `JsonDataAssetSync.Sync` reruns the start-up check, e.g. after a `git pull` with the editor open. Nothing is
 checked during Play In Editor; a notification says so.
 
 ### Missing pairs
 
-The start-up check (and `JsonBlueprintSync.Sync`) also looks for:
+The start-up check (and `JsonDataAssetSync.Sync`) also looks for:
 
 - **a JSON file without its data asset**: the asset does not exist, or is not a data asset (e.g. a file left from an older version
   of the plugin that synced Blueprints). Delete the file if the asset was deleted on purpose, or restore the asset.
@@ -152,11 +171,11 @@ Each one is logged as a warning with its fix, and one notification gives the cou
 
 ### Notifications
 
-Problems are shown as notifications, not only in the Output Log (category `LogJsonBlueprintSync`):
+Problems are shown as notifications, not only in the Output Log (category `LogJsonDataAssetSync`):
 
 - JSON files that could not be checked: unreadable, or the asset cannot be loaded. One notification per check.
 - Missing pairs (see above).
-- `Saved/JsonBlueprintSync/cache.json` cannot be read (at start-up) or written (once, until a write works again).
+- `Saved/JsonDataAssetSync/cache.json` cannot be read (at start-up) or written (once, until a write works again).
 - A JSON file cannot be written, or cannot be deleted when its asset is renamed or deleted.
 - An asset is renamed but its JSON cannot be read, so the file is not moved.
 - An apply is undone (the asset is listed again).
@@ -219,7 +238,7 @@ Once every conflict is chosen (the counter below the list shows how many are lef
 ### How the plugin tells which side changed
 
 When a difference is found, the plugin works out the **base**: the values both sides had at the last sync. It keeps the base in
-`Saved/JsonBlueprintSync/Base/` until the difference is resolved. A key is a JSON change if the asset still has the base value, an
+`Saved/JsonDataAssetSync/Base/` until the difference is resolved. A key is a JSON change if the asset still has the base value, an
 asset change if the file has the base value, and a conflict otherwise.
 
 - Only the JSON changed: the base is the asset as it is now, so every differing key is a JSON change.
@@ -246,20 +265,20 @@ Nothing detects these, because the `.uasset` does not change. Saving the asset f
 
 ### Local state
 
-Sync state is kept in `Saved/JsonBlueprintSync/`, which is local and should not be committed. `cache.json` stores, per asset, the
+Sync state is kept in `Saved/JsonDataAssetSync/`, which is local and should not be committed. `cache.json` stores, per asset, the
 hash of the JSON and the package's saved hash as of the last sync, and whether the asset is waiting for review. An asset whose two
 hashes both match is skipped without loading it; the package hash comes from the asset registry. Deleting the folder is safe: on the
 next start every file is compared again, without a base.
 
 ## Settings
 
-**Project Settings > Plugins > JSON Blueprint Sync**, stored in the project's `Config/DefaultEditor.ini` so the whole team shares
+**Project Settings > Plugins > JSON Data Asset Sync**, stored in the project's `Config/DefaultEditor.ini` so the whole team shares
 them:
 
 ```ini
-[/Script/JsonBlueprintSync.JsonBlueprintSyncSettings]
+[/Script/JsonDataAssetSync.JsonDataAssetSyncSettings]
 ; Folder for the JSON files, relative to the project folder.
-JsonDir=JsonBlueprintSync
+JsonDir=JsonDataAssetSync
 ; Automatic or Manual.
 Mode=Automatic
 ; Content folders whose data assets are not synced at all: no JSON is written, read or checked for them.
@@ -273,7 +292,7 @@ To turn the plugin off, disable it.
 For command-line use and CI:
 
 ```
-UnrealEditor-Cmd.exe <Project>.uproject -run=JsonBlueprintSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]
+UnrealEditor-Cmd.exe <Project>.uproject -run=JsonDataAssetSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]
 ```
 
 - `-export` writes JSON for every synced data asset under `-dir` (default `/Game`), and warns about JSON files without their asset.
@@ -308,10 +327,10 @@ JSON.
 
 ## Tests
 
-Automation tests are under `JsonBlueprintSync.*`:
+Automation tests are under `JsonDataAssetSync.*`:
 
 ```
-UnrealEditor-Cmd.exe <Project>.uproject -ExecCmds="Automation RunTests JsonBlueprintSync" -TestExit="Automation Test Queue Empty" -unattended -nullrhi -nosplash
+UnrealEditor-Cmd.exe <Project>.uproject -ExecCmds="Automation RunTests JsonDataAssetSync" -TestExit="Automation Test Queue Empty" -unattended -nullrhi -nosplash
 ```
 
 They cover the library and the subsystem's decision rules (which base to use, when Automatic mode applies on its own, missing

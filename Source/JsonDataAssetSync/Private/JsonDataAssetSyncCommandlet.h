@@ -3,12 +3,12 @@
 #include "CoreMinimal.h"
 #include "Commandlets/Commandlet.h"
 
-#include "JsonBlueprintSyncCommandlet.generated.h"
+#include "JsonDataAssetSyncCommandlet.generated.h"
 
 /**
  * Syncs data asset values with JSON files.
  *
- *   UnrealEditor-Cmd.exe <Project>.uproject -run=JsonBlueprintSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]
+ *   UnrealEditor-Cmd.exe <Project>.uproject -run=JsonDataAssetSync -export|-import|-verify [-dir=/Game/...] [-jsondir=<path>] [-nosave]
  *
  * -export  writes the JSON for every data asset under -dir (only files that change).
  * -import  applies every JSON file under -dir to its data asset, then saves the changed packages (unless -nosave).
@@ -16,12 +16,12 @@
  * Data assets in the ExcludedFolders setting are skipped.
  */
 UCLASS()
-class UJsonBlueprintSyncCommandlet : public UCommandlet
+class UJsonDataAssetSyncCommandlet : public UCommandlet
 {
 	GENERATED_BODY()
 
 public:
-	UJsonBlueprintSyncCommandlet();
+	UJsonDataAssetSyncCommandlet();
 
 	virtual int32 Main(const FString& Params) override;
 };

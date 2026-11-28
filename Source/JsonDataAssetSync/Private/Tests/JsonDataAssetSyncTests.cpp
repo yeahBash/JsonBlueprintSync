@@ -1,5 +1,5 @@
-#include "JsonBlueprintSync.h"
-#include "JsonBlueprintSyncSettings.h"
+#include "JsonDataAssetSync.h"
+#include "JsonDataAssetSyncSettings.h"
 #include "../SyncState.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -17,13 +17,13 @@
 #include "Misc/ScopeExit.h"
 #include "UObject/Package.h"
 
-namespace JsonBlueprintSync::Tests
+namespace JsonDataAssetSync::Tests
 {
 	constexpr EAutomationTestFlags TestFlags = EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter;
 
 	UPackage* CreateTestPackage(const FString& Name)
 	{
-		UPackage* Package = CreatePackage(*(TEXT("/Temp/JsonBlueprintSyncTests/") + Name));
+		UPackage* Package = CreatePackage(*(TEXT("/Temp/JsonDataAssetSyncTests/") + Name));
 		Package->SetPackageFlags(PKG_InMemoryOnly);
 		return Package;
 	}
@@ -148,11 +148,11 @@ namespace JsonBlueprintSync::Tests
 	}
 }
 
-using namespace JsonBlueprintSync;
-using namespace JsonBlueprintSync::Tests;
+using namespace JsonDataAssetSync;
+using namespace JsonDataAssetSync::Tests;
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncFormatTest, "JsonBlueprintSync.Format", TestFlags)
-bool FJsonBlueprintSyncFormatTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncFormatTest, "JsonDataAssetSync.Format", TestFlags)
+bool FJsonDataAssetSyncFormatTest::RunTest(const FString&)
 {
 	FAssetDefaults Doc;
 	Doc.Asset = TEXT("/Game/A/DA_B");
@@ -222,22 +222,22 @@ bool FJsonBlueprintSyncFormatTest::RunTest(const FString&)
 			&& Minimal.Self.Num() == 0);
 	}
 
-	const FString Root = TEXT("C:/Project/JsonBlueprintSync");
+	const FString Root = TEXT("C:/Project/JsonDataAssetSync");
 	const FString Path = GetJsonPath(Root, TEXT("/Game/Features/Light/DA_Lamp"));
-	TestEqual(TEXT("JSON path"), Path, FString(TEXT("C:/Project/JsonBlueprintSync/Game/Features/Light/DA_Lamp.json")));
+	TestEqual(TEXT("JSON path"), Path, FString(TEXT("C:/Project/JsonDataAssetSync/Game/Features/Light/DA_Lamp.json")));
 	FString PackageName;
 	TestTrue(TEXT("Package name from path"), GetPackageName(Root, Path, PackageName));
 	TestEqual(TEXT("Package name"), PackageName, FString(TEXT("/Game/Features/Light/DA_Lamp")));
 	TestFalse(TEXT("Outside the root"), GetPackageName(Root, TEXT("C:/Other/Game/DA.json"), PackageName));
-	TestFalse(TEXT("Not JSON"), GetPackageName(Root, TEXT("C:/Project/JsonBlueprintSync/Game/DA.txt"), PackageName));
+	TestFalse(TEXT("Not JSON"), GetPackageName(Root, TEXT("C:/Project/JsonDataAssetSync/Game/DA.txt"), PackageName));
 
 	TestEqual(TEXT("Hash ignores line endings"), HashText(TEXT("a\r\nb\n")), HashText(TEXT("a\nb\n")));
 	TestNotEqual(TEXT("Hash sees content"), HashText(TEXT("a\n")), HashText(TEXT("b\n")));
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncRoundTripTest, "JsonBlueprintSync.RoundTrip", TestFlags)
-bool FJsonBlueprintSyncRoundTripTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncRoundTripTest, "JsonDataAssetSync.RoundTrip", TestFlags)
+bool FJsonDataAssetSyncRoundTripTest::RunTest(const FString&)
 {
 	FTestData Data;
 	UDataAsset* Asset = Data.Asset;
@@ -278,8 +278,8 @@ bool FJsonBlueprintSyncRoundTripTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncRejectsBadValuesTest, "JsonBlueprintSync.RejectsBadValues", TestFlags)
-bool FJsonBlueprintSyncRejectsBadValuesTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncRejectsBadValuesTest, "JsonDataAssetSync.RejectsBadValues", TestFlags)
+bool FJsonDataAssetSyncRejectsBadValuesTest::RunTest(const FString&)
 {
 	FTestData Data;
 	UDataAsset* Asset = Data.Asset;
@@ -308,8 +308,8 @@ bool FJsonBlueprintSyncRejectsBadValuesTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncMissingKeyResetsTest, "JsonBlueprintSync.MissingKeyResets", TestFlags)
-bool FJsonBlueprintSyncMissingKeyResetsTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncMissingKeyResetsTest, "JsonDataAssetSync.MissingKeyResets", TestFlags)
+bool FJsonDataAssetSyncMissingKeyResetsTest::RunTest(const FString&)
 {
 	// The class default of FlickerSpeed is 7, so a reset is visible as more than a zeroed value.
 	FTestData Data(7.0);
@@ -347,8 +347,8 @@ bool FJsonBlueprintSyncMissingKeyResetsTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncMergeTest, "JsonBlueprintSync.Merge", TestFlags)
-bool FJsonBlueprintSyncMergeTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncMergeTest, "JsonDataAssetSync.Merge", TestFlags)
+bool FJsonDataAssetSyncMergeTest::RunTest(const FString&)
 {
 	// What the JSON Sync tab does: base = the asset when the JSON change was seen; the user changed Tint locally since; the JSON
 	// changed FlickerSpeed and dropped Steps. Applying the JSON-side keys keeps the local Tint.
@@ -412,8 +412,8 @@ bool FJsonBlueprintSyncMergeTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncTakeKeysTest, "JsonBlueprintSync.TakeKeys", TestFlags)
-bool FJsonBlueprintSyncTakeKeysTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncTakeKeysTest, "JsonDataAssetSync.TakeKeys", TestFlags)
+bool FJsonDataAssetSyncTakeKeysTest::RunTest(const FString&)
 {
 	FAssetDefaults Current;
 	Current.Asset = TEXT("/Game/X");
@@ -440,8 +440,8 @@ bool FJsonBlueprintSyncTakeKeysTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncChangedAfterReviewTest, "JsonBlueprintSync.ChangedAfterReview", TestFlags)
-bool FJsonBlueprintSyncChangedAfterReviewTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncChangedAfterReviewTest, "JsonDataAssetSync.ChangedAfterReview", TestFlags)
+bool FJsonDataAssetSyncChangedAfterReviewTest::RunTest(const FString&)
 {
 	// The subsystem's case: the user reviewed file Reviewed, took Speed from it and kept the asset's Tint, then the file changed
 	// again (Updated) before the save. With the reviewed file as the base, the new change is a JSON change and the kept value an
@@ -482,10 +482,10 @@ bool FJsonBlueprintSyncChangedAfterReviewTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncCacheTest, "JsonBlueprintSync.Cache", TestFlags)
-bool FJsonBlueprintSyncCacheTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncCacheTest, "JsonDataAssetSync.Cache", TestFlags)
+bool FJsonDataAssetSyncCacheTest::RunTest(const FString&)
 {
-	const FString Dir = FPaths::Combine(FPaths::AutomationTransientDir(), TEXT("JsonBlueprintSync"), FGuid::NewGuid().ToString());
+	const FString Dir = FPaths::Combine(FPaths::AutomationTransientDir(), TEXT("JsonDataAssetSync"), FGuid::NewGuid().ToString());
 	const FString Path = FPaths::Combine(Dir, TEXT("cache.json"));
 
 	FSyncCache Cache;
@@ -520,8 +520,8 @@ bool FJsonBlueprintSyncCacheTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncBaseChoiceTest, "JsonBlueprintSync.BaseChoice", TestFlags)
-bool FJsonBlueprintSyncBaseChoiceTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncBaseChoiceTest, "JsonDataAssetSync.BaseChoice", TestFlags)
+bool FJsonDataAssetSyncBaseChoiceTest::RunTest(const FString&)
 {
 	// Which side changed what, from the hashes recorded at the last sync.
 	FBaseInputs JsonOnly;
@@ -585,10 +585,10 @@ bool FJsonBlueprintSyncBaseChoiceTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncSettingsTest, "JsonBlueprintSync.Settings", TestFlags)
-bool FJsonBlueprintSyncSettingsTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncSettingsTest, "JsonDataAssetSync.Settings", TestFlags)
+bool FJsonDataAssetSyncSettingsTest::RunTest(const FString&)
 {
-	const UJsonBlueprintSyncSettings* Fresh = NewObject<UJsonBlueprintSyncSettings>(GetTransientPackage());
+	const UJsonDataAssetSyncSettings* Fresh = NewObject<UJsonDataAssetSyncSettings>(GetTransientPackage());
 	TestTrue(TEXT("Automatic by default"), Fresh->Mode == EJsonSyncMode::Automatic);
 	TestEqual(TEXT("No excluded folders by default"), Fresh->ExcludedFolders.Num(), 0);
 
@@ -597,11 +597,11 @@ bool FJsonBlueprintSyncSettingsTest::RunTest(const FString&)
 	TestFalse(TEXT("/Engine is not synced"), Roots.Contains(TEXT("/Engine")));
 	TestTrue(TEXT("Under /Game"), IsSyncedPackage(TEXT("/Game/Features/DA_Lamp")));
 	TestFalse(TEXT("Engine content"), IsSyncedPackage(TEXT("/Engine/EngineMaterials/DA_X")));
-	TestFalse(TEXT("Temp package"), IsSyncedPackage(TEXT("/Temp/JsonBlueprintSyncTests/DA_X")));
+	TestFalse(TEXT("Temp package"), IsSyncedPackage(TEXT("/Temp/JsonDataAssetSyncTests/DA_X")));
 	TestFalse(TEXT("A root is matched as a whole folder"), IsSyncedPackage(TEXT("/GameX/DA_X")));
 
 	// The excluded folders of the real settings, restored afterwards (not saved to the ini).
-	UJsonBlueprintSyncSettings* Settings = GetMutableDefault<UJsonBlueprintSyncSettings>();
+	UJsonDataAssetSyncSettings* Settings = GetMutableDefault<UJsonDataAssetSyncSettings>();
 	const TArray<FDirectoryPath> Saved = Settings->ExcludedFolders;
 	ON_SCOPE_EXIT { Settings->ExcludedFolders = Saved; };
 	FDirectoryPath ThirdParty;
@@ -614,8 +614,8 @@ bool FJsonBlueprintSyncSettingsTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncDataAssetTest, "JsonBlueprintSync.DataAsset", TestFlags)
-bool FJsonBlueprintSyncDataAssetTest::RunTest(const FString&)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncDataAssetTest, "JsonDataAssetSync.DataAsset", TestFlags)
+bool FJsonDataAssetSyncDataAssetTest::RunTest(const FString&)
 {
 	FTestData Data;
 	TestTrue(TEXT("Data asset"), IsDataAsset(Data.Asset));
@@ -632,24 +632,24 @@ bool FJsonBlueprintSyncDataAssetTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncMissingPairsTest, "JsonBlueprintSync.MissingPairs", TestFlags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonDataAssetSyncMissingPairsTest, "JsonDataAssetSync.MissingPairs", TestFlags)
 
-bool FJsonBlueprintSyncMissingPairsTest::RunTest(const FString&)
+bool FJsonDataAssetSyncMissingPairsTest::RunTest(const FString&)
 {
 	// A JSON root of its own, so the project's JSON files do not matter.
-	const FString JsonRoot = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("JsonBlueprintSyncTests/MissingPairs"));
+	const FString JsonRoot = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("JsonDataAssetSyncTests/MissingPairs"));
 	IFileManager::Get().DeleteDirectory(*JsonRoot, false, true);
 	ON_SCOPE_EXIT { IFileManager::Get().DeleteDirectory(*JsonRoot, false, true); };
 
-	UJsonBlueprintSyncSettings* Settings = GetMutableDefault<UJsonBlueprintSyncSettings>();
+	UJsonDataAssetSyncSettings* Settings = GetMutableDefault<UJsonDataAssetSyncSettings>();
 	const TArray<FDirectoryPath> Saved = Settings->ExcludedFolders;
 	ON_SCOPE_EXIT { Settings->ExcludedFolders = Saved; };
 	FDirectoryPath Excluded;
-	Excluded.Path = TEXT("/Game/JsonBlueprintSyncTestsExcluded");
+	Excluded.Path = TEXT("/Game/JsonDataAssetSyncTestsExcluded");
 	Settings->ExcludedFolders = { Excluded };
 
-	const FString Gone = GetJsonPath(JsonRoot, TEXT("/Game/JsonBlueprintSyncTestsGone/DA_Gone"));
-	const FString Skipped = GetJsonPath(JsonRoot, TEXT("/Game/JsonBlueprintSyncTestsExcluded/DA_Gone"));
+	const FString Gone = GetJsonPath(JsonRoot, TEXT("/Game/JsonDataAssetSyncTestsGone/DA_Gone"));
+	const FString Skipped = GetJsonPath(JsonRoot, TEXT("/Game/JsonDataAssetSyncTestsExcluded/DA_Gone"));
 	TestTrue(TEXT("Write a JSON without its asset"), FFileHelper::SaveStringToFile(TEXT("{}\n"), *Gone));
 	TestTrue(TEXT("Write a JSON in an excluded folder"), FFileHelper::SaveStringToFile(TEXT("{}\n"), *Skipped));
 

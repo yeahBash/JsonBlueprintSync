@@ -4,7 +4,7 @@
 #include "Engine/DeveloperSettings.h"
 #include "Engine/EngineTypes.h"
 
-#include "JsonBlueprintSyncSettings.generated.h"
+#include "JsonDataAssetSyncSettings.generated.h"
 
 /** What happens to a JSON change on editor start or Refresh. Saving a data asset writes its JSON in both modes. */
 UENUM()
@@ -16,18 +16,18 @@ enum class EJsonSyncMode : uint8
 	Manual,
 };
 
-/** Project Settings > Plugins > JSON Blueprint Sync. Stored in Config/DefaultEditor.ini, so the whole team shares it. */
-UCLASS(config = Editor, defaultconfig, meta = (DisplayName = "JSON Blueprint Sync"))
-class JSONBLUEPRINTSYNC_API UJsonBlueprintSyncSettings : public UDeveloperSettings
+/** Project Settings > Plugins > JSON Data Asset Sync. Stored in Config/DefaultEditor.ini, so the whole team shares it. */
+UCLASS(config = Editor, defaultconfig, meta = (DisplayName = "JSON Data Asset Sync"))
+class JSONDATAASSETSYNC_API UJsonDataAssetSyncSettings : public UDeveloperSettings
 {
 	GENERATED_BODY()
 
 public:
-	UJsonBlueprintSyncSettings();
+	UJsonDataAssetSyncSettings();
 
 	/** Folder for the JSON files, relative to the project folder. /Game/A/DA_B is written to <JsonDir>/Game/A/DA_B.json. */
 	UPROPERTY(config, EditAnywhere, Category = "General")
-	FString JsonDir = TEXT("JsonBlueprintSync");
+	FString JsonDir = TEXT("JsonDataAssetSync");
 
 	/** What happens to JSON changes found on editor start or Refresh, e.g. after a git pull. */
 	UPROPERTY(config, EditAnywhere, Category = "General")
