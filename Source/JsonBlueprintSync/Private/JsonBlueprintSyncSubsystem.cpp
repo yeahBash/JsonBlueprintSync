@@ -2,7 +2,6 @@
 
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/IAssetRegistry.h"
-#include "JsonBlueprintMergeSubsystem.h"
 #include "JsonBlueprintSyncModule.h"
 #include "JsonBlueprintSyncSettings.h"
 #include "Editor.h"
@@ -547,12 +546,6 @@ void UJsonBlueprintSyncSubsystem::SyncFromJson()
 
 	ShowPendingNotification();
 	OnPendingChanged.Broadcast();
-
-	// The asset merges are checked at the same times: at start-up and on JsonBlueprintSync.Sync.
-	if (UJsonBlueprintMergeSubsystem* Merges = GEditor ? GEditor->GetEditorSubsystem<UJsonBlueprintMergeSubsystem>() : nullptr)
-	{
-		Merges->Refresh(true);
-	}
 }
 
 bool UJsonBlueprintSyncSubsystem::Detect(const FString& PackageName, const FString& Text, const FString& FileHash, EAssetKind Kind, bool bAssetChanged,

@@ -322,111 +322,17 @@ UnrealEditor-Cmd.exe <Project>.uproject -run=JsonBlueprintSync -export|-import|-
 
 In Git Bash, set `MSYS_NO_PATHCONV=1` so `/Game/...` arguments are not turned into Windows paths.
 
-## Git diff for assets
+## Git diff and merge for assets
 
-The git and TortoiseGit diff of assets is part of **UAssReader**, a standalone program that reads asset files without the editor
-or the project's code and writes their stored values as merge text, one line per value. Its repository (private, as it is engine
-code) has the program, the scripts (`Tools/uasset-textconv.sh`, `Tools/uasset-diff.js`) and the setup in its README.
+The JSON files give a readable diff of the values a change sets. For the `.uasset` files themselves:
 
-The merge below needs that setup: `git config uassreader.path` (best with `--global`) and `git config diff.unreal.textconv`.
+- **Diff**: the git and TortoiseGit diff of assets is part of **UAssReader**, a standalone program that reads asset files without
+  the editor or the project's code and writes their stored values as merge text, one line per value. Its repository (private, as
+  it is engine code) has the program, the scripts and the setup in its README.
+- **Merge**: merging two versions of an asset through that text, and applying the result in the editor, is the separate editor
+  plugin **UAssPainMerge** (https://github.com/yeahBash/UAssPainMerge).
 
-## Git merge for assets
-
-Git can't merge two versions of a `.uasset`. `Tools/uasset-merge.js`, set as TortoiseGit's merge tool for assets, lets you
-merge their merge text in TortoiseGitMerge instead. It makes the texts with the textconv of the git diff setup above. The
-result is saved next to the project, not over the asset, and the plugin applies it in the editor.
-
-In **TortoiseGit > Settings > Diff Viewer > Merge Tool > Advanced**, add `.uasset` and `.umap` with:
-
-```
-wscript.exe "<absolute path to>\Plugins\JsonBlueprintSync\Tools\uasset-merge.js" %base %mine %theirs %merged %bname %yname %tname //E:javascript
-```
-
-When a merge leaves an asset conflicted, **Edit conflicts** on it in TortoiseGit:
-
-1. The script writes the merge text of the three versions to a temporary folder and opens TortoiseGitMerge on them.
-2. Resolve the conflicts and save. The result goes to `merged.txt` in the asset's merge folder,
-   `<Project>/Saved/JsonBlueprintSync/Merge/<package path>/`, for example `Saved/JsonBlueprintSync/Merge/Game/Features/UI/WBP_HUD/`
-   for `/Game/Features/UI/WBP_HUD`. A plugin's assets go under the plugin's name. `merged.txt` is the only file kept there.
-3. When TortoiseGitMerge closes, the script deletes the temporary folder. The `.uasset` in the working tree stays as it is,
-   which is ours.
-
-If you close TortoiseGitMerge without saving, no merge folder is left. If the merge folder already holds a `merged.txt`, the
-script asks whether to start over. Yes deletes `merged.txt` and opens the merge again; No changes nothing.
-
-The merge is finished when you delete its `merged.txt` (with the delete button in the Asset Merges tab, see below). Until then a
-pre-commit hook refuses commits, because committing would keep ours' `.uasset` and lose theirs' changes. Call the hook from
-`.git/hooks/pre-commit` in the repository:
-
-```
-#!/bin/sh
-sh "<path from the repository root to>/Plugins/JsonBlueprintSync/Tools/pre-commit-merges.sh" || exit 1
-```
-
-Don't use `core.hooksPath` for it: that turns off the hooks Git LFS keeps in `.git/hooks`.
-
-### The Asset Merges tab
-
-When the editor starts, and on `JsonBlueprintSync.Sync` or **Refresh** in the JSON Sync tab, the plugin checks the merge folder.
-If it holds merges that aren't done, a notification says "N merge(s) to apply" with **Open**, and a status bar entry left of the
-JSON Sync one says "N Merge(s) to Apply" ("Merges Done" once every merge is done; hidden while there is no merge file). Both open
-**Window > Asset Merges**. Each check runs the reader on every merged asset, so it takes a moment per merge.
-
-The plugin runs the reader (`git config uassreader.path`) on the saved asset and compares its text with `merged.txt` line by
-line, so the list is right whichever side's `.uasset` is in the working tree, and also after you saved part of the merge.
-
-On the left are the merge files with their status:
-
-- **Ready**: there are rows to apply.
-- **Done**: the saved asset has the merged values, apart from rows that can't be applied.
-- **Has conflict markers**, **Has errors**: fix `merged.txt` in the merge tool (the status's tooltip has the lines).
-- **Format differs**: `merged.txt` was written by another version of the reader. Run the merge again.
-- **Asset not found**, **Reader not set up**, **Reader failed** (the tooltip has the reader's message).
-- **Asset has unsaved changes** that Apply didn't make: the rows are for the saved file. Save or revert the asset first.
-
-Only Ready merges can be applied. The delete button (recycle bin) of a merge asks "Are you sure you want to delete the file?" and
-on Yes deletes its `merged.txt`, and the folders that are left empty. The plugin never deletes a merge file by itself.
-
-On the right are the rows of the selected merges (select several with Ctrl or Shift). Columns: **Use**, the object, the path, the
-current value (of the saved asset), the merged value, and the action:
-
-- **Set**, **Add** or **Remove** (map and set entries), **Reset** (the line isn't in `merged.txt`: back to the inherited value).
-  These are ticked; untick the ones to leave out.
-- **Not applicable** rows are greyed and can't be ticked: graphs, values the reader can't decode, added or removed objects, a
-  changed class. The tooltip says why. Take the other side's `.uasset` and merge again, or redo the change by hand.
-- **Applied, not saved**: applied in this session. The rows are worked out from the saved file, so they stay until the asset is
-  saved, and then the list is worked out again. Undo makes them applicable again.
-- **failed**: the last Apply couldn't apply the row. The tooltip says why.
-
-**Apply** applies the ticked rows of all selected merges in one undo step (Edit > Undo), parents before children, and leaves
-the assets modified for you to check and save. **Apply and Save** then compiles the changed Blueprints and saves the changed
-assets. **Show in Content Browser** selects the assets; double-click a merge to open its asset.
-
-Each value is written by its path, the way the Details panel writes it: child Blueprints and other assets that still had the old
-value at that path get the new one, and their own overrides stay. Struct members, array elements, map entries, set elements and the
-members of an instanced struct are written one by one:
-
-- `Items.Num` resizes the array; new elements start with default values, and the rows for them follow.
-- `Map["key"]` sets or adds an entry, and `(removed)` removes it. `Set["key"] = (added)` or `(removed)` adds or removes an element.
-- `Instance.(type)` changes an instanced struct's type. Its members start from the parent's values if the parent holds the same
-  type, else from the type's defaults. The rows for the members follow; a type change makes a row of every member line.
-- A Reset takes the parent's value at the same path. A map entry or set element the parent doesn't have is removed, and a reset of
-  `Items.Num` or `Instance.(type)` takes the parent's whole array or instanced struct.
-
-Each row is logged as Applied, Unchanged or Failed with the reason. These rows fail, and the others are still applied:
-
-- A value for an array element past the end, or for a member of an instanced struct type the asset doesn't hold yet. Apply the
-  `Num` or `(type)` row first; rows come in that order.
-- A text's developer notes (`.(devnotes)`).
-- Values the Details panel can't edit, and values that hold an object of their own (instanced subobjects).
-- Properties the asset doesn't have, for example after a rename, and values that can't be read.
-
-Make the failed rows by hand and save. When the merge says **Done**, delete it.
-
-Console commands do the same without the tab: `JsonBlueprintSync.Merges` checks the merges again and logs each one with its
-status and rows. `JsonBlueprintSync.ApplyMerge <package> [save]` applies every row of a Ready merge as Apply does, or with `save`
-as Apply and Save, e.g. `JsonBlueprintSync.ApplyMerge /Game/Features/UI/WBP_HUD save`. In a run with `-unattended` the editor
-doesn't save, and the notification says so.
+This plugin doesn't need either of them.
 
 ## Limitations
 

@@ -14,8 +14,7 @@ plugin does from a user's point of view, see [README.md](../README.md). To check
   - [2.7 Editor subsystem: JsonBlueprintSyncSubsystem](#27-editor-subsystem-jsonblueprintsyncsubsystem)
   - [2.8 The JSON Sync tab: SJsonSyncPanel](#28-the-json-sync-tab-sjsonsyncpanel)
   - [2.9 Commandlet: JsonBlueprintSyncCommandlet](#29-commandlet-jsonblueprintsynccommandlet)
-  - [2.10 Asset merges: AssetMerge](#210-asset-merges-assetmerge)
-  - [2.11 Automation tests](#211-automation-tests)
+  - [2.10 Automation tests](#210-automation-tests)
 - [3. End-to-end flows](#3-end-to-end-flows)
 - [4. Life of one asset's sync state](#4-life-of-one-assets-sync-state)
 - [5. Corner cases](#5-corner-cases)
@@ -95,13 +94,7 @@ Source/JsonBlueprintSync/
     SJsonSyncPanel.h / .cpp          the JSON Sync tab
     SJsonSyncStatusBar.h / .cpp      the status bar entry
     JsonBlueprintSyncCommandlet.h / .cpp  -run=JsonBlueprintSync
-    AssetMerge.h / .cpp              merges from the TortoiseGit merge tool: parse, diff, apply
-    JsonBlueprintMergeSubsystem.h / .cpp  merge state in the editor, JsonBlueprintSync.Merges and ApplyMerge
-    SAssetMergePanel.h / .cpp        the Asset Merges tab
-    SAssetMergeStatusBar.h / .cpp    the merge status bar entry
     Tests/JsonBlueprintSyncTests.cpp automation tests
-    Tests/AssetMergeTests.cpp        automation tests for AssetMerge
-Tools/                               git and TortoiseGit scripts (README: Git diff / Git merge for assets)
 ```
 
 ### 2.1 JsonBlueprintSync.uplugin
@@ -832,125 +825,9 @@ Caveats:
   match the cache, so the files are compared again, match their assets, and are recorded.
 - In Git Bash, set `MSYS_NO_PATHCONV=1`, or `/Game/...` arguments are turned into Windows paths.
 
-### 2.10 Asset merges: AssetMerge
+### 2.10 Automation tests
 
-`Private/AssetMerge.h` and `.cpp`, namespace `JsonBlueprintSync::AssetMerge`. Separate from the JSON sync: it works on the
-UAssReader merge text that `Tools/uasset-merge.js` saves as `<Project>/Saved/JsonBlueprintSync/Merge/<package path>/merged.txt`
-after a merge in TortoiseGitMerge.
-
-- `FindMergeFiles(Dir)`: every `merged.txt` below `Dir`; the folder below `Dir` is the package (`Game/A/B` → `/Game/A/B`,
-  `MyPlugin/X` → `/MyPlugin/X`). A `merged.txt` directly in `Dir` is ignored.
-- `ParseMergeText`: the first `#` line is the format (`UAssReader merge text 3`), `# Asset:` the package. Sections are
-  `[<object>] <class>` (split at the last `] `); lines split at the first ` = ` outside quotes and brackets, because a map key can
-  hold ` = `. Conflict markers (`<<<<<<<`, `|||||||`, `=======`, `>>>>>>>`) are collected by line. Errors: a value outside a
-  section, no ` = `, an empty section name, a section or a path twice (paths are not checked in `[!ignored]`).
-- `DiffMergeText(Current, Merged)`: rows by object and path. Equal values give no row. A path only in Current is **Reset**; a merged
-  `(added)` / `(removed)` is **Add** / **Remove**; anything else is **Set**. **Not applicable**: `!graph`, `!native` and other `!`
-  paths, `!notdecoded` values on either side, an object only on one side, a changed class (one row for the object, its lines
-  skipped). `[!ignored]` is skipped.
-- `FindReader`: `git config --get uassreader.path` run in the project folder (the same setting as UAssReader's scripts); the file
-  must exist. `RunReader`: `<reader> -merge -s=<Saved/JsonBlueprintSync/Reader-<guid>.txt> -f <asset file>`, reads and deletes the
-  output. Both run synchronously on the calling thread.
-- `CheckMergeFile(Location, AssetFile, bAssetDirty, ReadAsset)`: the status. Checked in this order: unreadable `merged.txt` or
-  parse errors (**Has errors**), conflict markers, `# Asset:` not matching the folder (**Has errors**), no asset file (**Asset not
-  found**), reader failure or unreadable reader text (**Reader failed**), different format lines (**Format differs**). Then the rows,
-  and **Asset has unsaved changes** if the package is loaded and dirty (rows are still filled in), else **Ready** if any row is
-  applicable, else **Done**. `ReadAsset` is a parameter so the tests can give the current text.
-- `CheckMergeFiles()`: all of the above for the project, with `FPackageName::DoesPackageExist` for the file and `FindPackage` for
-  the dirty flag. Without a reader, every file that got as far as reading the asset is **Reader not set up**.
-- Console command `JsonBlueprintSync.Merges` (an `FAutoConsoleCommand`, so it exists outside the subsystem too) logs every file's
-  status and rows.
-- `ApplyRows(Asset, Rows)`: writes rows to the loaded objects, one `FRowResult` (**Applied**, **Unchanged**, **Failed** with a
-  message) per row. Rows are independent: a failed row is skipped and the rest still run. Per row:
-  1. **Not applicable** fails with its `Reason`.
-  2. The object is `FindObject` of the row's object path. It must be in the asset's package. `GetPathName` gives the same paths
-     as the reader (CDO, SCS and ICH templates, widget-tree widgets and slots, the data asset itself).
-  3. `SplitPath` splits the path into names, `[index]`, `["key"]` (unescaped as the reader's `QuoteText` escapes it, so `]`, `.`
-     and ` = ` inside belong to the key) and `.(type)` / `.(devnotes)`. `ResolvePath` turns them into steps: a member (with
-     `FindFProperty`, case-insensitive like the reader's names; `[i]` after a static array is its index, the bare name index 0,
-     as the reader writes `Tag.ArrayIndex`), an array element, a map entry (the unescaped key imported into the key property)
-     or an instanced struct's inner struct (the type the object holds now). The leaf is the value, an array's `Num`, an
-     instanced struct's `(type)`, or a set element. Refused: a property without `CPF_Edit`, or with `CPF_EditConst` or
-     `CPF_Deprecated`, or at the top level `CPF_DisableEditOnTemplate` on a template (CDO, archetype, or anything in a
-     `UWidgetTree`) or `CPF_DisableEditOnInstance` on anything else; `CPF_InstancedReference` / `CPF_PersistentInstance` on the
-     property or a container's inner property; a step that doesn't fit the value (a name after an array, an index after a map,
-     anything after a set element or a plain value); `.(devnotes)`. So `bIsVariable`, `DisplayLabel` and widget `Slot` rows
-     fail: they aren't editable in the Details panel. A member the instanced struct's current type doesn't have is "gone": a
-     Reset of it is **Unchanged**, anything else fails.
-  4. The state at the path is read: missing (an array element past the end, another instanced struct type), absent (a map entry on
-     the way or the set element isn't there), or present with a copy of the value; for `Num` and `(type)` the value is the whole
-     array or instanced struct. Missing: Reset is **Unchanged**, the rest fail and ask for the `Num` or `(type)` row first.
-  5. The new state. **Set**: the current value (default where a map entry isn't there yet; default for `()`, the reader's line for a
-     struct value with only default members) with the merged text parsed onto it by `ImportValue` (strict; partial struct text
-     keeps the other members; a quoted string or name is unquoted first, since Unreal's import, not delimited, keeps the quotes).
-     `Num` resizes a copy of the array. `(type)` takes the archetype's instanced struct if it holds that type, else
-     `InitializeAs` with the type's defaults, as `FInstancedStruct::Serialize` saves the delta; `None` empties it. **Add** and
-     **Remove**: a set element there or not, a map entry removed. **Reset**: the state at the same path in `GetArchetype()`, the
-     basis SavePackage uses for the delta, so for an ICH template it is the parent Blueprint's template. Where the archetype
-     doesn't have the property, the array element or the instanced struct's type, the default of what would be there; where it
-     doesn't have a map entry on the way, that entry is removed (the row then works on the entry); a set element follows the
-     archetype's set.
-  6. An identical state is **Unchanged**. Otherwise the inheritors are found the way
-     `PropertyAccessUtil::GetArchetypeInstancesInheritingPropertyValue` does, but comparing only the state at the path, so a struct
-     member, array element or map entry propagates on its own: each archetype instance whose chain up to the object has the old
-     state at every link (an inheritor that lacks the same element or entry doesn't match, unless the old state was absent too).
-     Then the object and the inheritors are written with `Modify`, `PreEditChange`, the change through `FScriptArrayHelper`,
-     `FScriptMapHelper` (`FindOrAdd`, `RemovePair`) or `FScriptSetHelper`, and `PostEditChangeProperty` (the innermost named
-     property as the property, the top-level property as the member property).
-
-  `MarkModified` runs if any row was applied. No transaction, compile or save.
-- `CheckMergeFiles(Locations, bCheckUnsaved)` checks the given files; the editor passes `false` and checks unsaved changes itself
-  (below), so the rows its own Apply left unsaved don't block the file.
-
-`UJsonBlueprintMergeSubsystem` (`Private/JsonBlueprintMergeSubsystem.h/.cpp`, an editor subsystem, not created in commandlets)
-holds the merge state in the editor:
-
-- `FEntry`: the checked `FMergeFile`, `Applied` (row key → id of the transaction that applied it), `Failures` (row key → the
-  message of the last Apply) and `bChangedByApply` (the package was clean before an Apply made it dirty). A row key is
-  `Object + "\n" + Path`.
-- `Refresh(bNotify)` runs `FindMergeFiles` and `CheckMergeFiles(..., false)` and keeps `Applied`, `Failures` and
-  `bChangedByApply` of the entries that are still there. `UJsonBlueprintSyncSubsystem::SyncFromJson` calls `Refresh(true)` at its
-  end, so start-up, `JsonBlueprintSync.Sync` and the JSON Sync tab's Refresh check merges too. With `bNotify`, a notification
-  "N merge(s) to apply" (Open, Later) is shown if any entry isn't Done; it replaces the previous one.
-- `GetStatus` turns Ready or Done into **UnsavedChanges** when the package is dirty and `bChangedByApply` is false: edits the rows
-  don't know about. A child that propagation dirtied and that has a merge of its own counts as changed by Apply.
-- `Apply(Requests, bSave)`: requests are package → row keys. Files whose `GetStatus` isn't Ready are skipped with a
-  warning. The rows are loaded with `LoadAsset`, stably sorted by `GetApplyOrder` (parents first) and applied by `ApplyRows` in one
-  `FScopedTransaction` "Apply Merge" (cancelled if nothing was applied), each row logged. Applied and Unchanged rows go into
-  `Applied` with the transaction's id, Failed rows into `Failures`. With `bSave` and a row applied: Blueprints are compiled
-  (`SkipGarbageCollection`) and `FEditorFileUtils::PromptForCheckoutAndSave` saves the changed packages; it returns Cancelled in
-  `-unattended` runs (`FApp::IsUnattended`) and the notification says so.
-- Undo and redo: as an `FEditorUndoClient`, `MatchesContext` records the transaction id, `PostUndo` marks it undone and
-  `PostRedo` clears that. `IsAppliedNotSaved` is true for a key whose transaction isn't undone, so an undone row can be ticked again.
-- `OnPackageSaved` (not autosaves, procedural saves or cooking) for a package with an entry or a `merged.txt` queues the package;
-  a next-tick ticker clears `Applied`, `Failures` and `bChangedByApply` of the queued packages and checks only them again, so
-  the rows come from the saved file.
-- `DeleteMergeFile(Package)` deletes `merged.txt`, then the folders up to the merge root while they are empty (a package's folder
-  can hold a nested package's merge), and drops the entry. Only the tab's delete button, after its question, calls it.
-- Console commands `JsonBlueprintSync.Merges` (refresh, log each entry with status and rows) and
-  `JsonBlueprintSync.ApplyMerge <package> [save]` (checks that package, then `Apply` with all its rows; logs "Applied N of M").
-- `OnChanged` is broadcast after every change; the tab and the status bar entry read the subsystem.
-
-`SAssetMergePanel` (the **Asset Merges** nomad tab, `GetMergeTabName()`) lists the entries (multi-select; Asset, Status, delete
-button) and the rows of the selected ones (Use checkbox, Object, Path, Current, Merged, Action). It keeps unticked keys per package;
-every other row that `CanTick` (applicable, not applied, file can be applied) is ticked. Apply and Apply and Save call `Apply`
-with the ticked keys of each selected package. The selection is kept by package name across refreshes.
-`SAssetMergeStatusBar` is inserted before the JSON Sync entry and hidden while there are no entries.
-
-Caveats:
-
-- The rows describe the **saved** file. Unsaved edits, including rows applied but not saved yet, don't show until the asset is saved.
-- Running the reader takes a moment per asset and blocks the editor while it runs.
-- `Applied` and `Failures` live only in the editor session. After a restart, rows applied but not saved are gone with the editor's
-  changes anyway.
-- `DiffMergeText` turns every member line of an instanced struct whose `(type)` line differs into a row, also lines that read the
-  same, because the type change re-initializes the members. Rows keep the merged order, so `Num` and `(type)` come before the
-  rows that need them.
-
-### 2.11 Automation tests
-
-`Private/Tests/JsonBlueprintSyncTests.cpp` holds 14 tests under `JsonBlueprintSync.*`, and `Private/Tests/AssetMergeTests.cpp` 8
-under `JsonBlueprintSync.AssetMerge.*`. They are compiled only with
+`Private/Tests/JsonBlueprintSyncTests.cpp` holds 14 tests under `JsonBlueprintSync.*`. They are compiled only with
 `WITH_DEV_AUTOMATION_TESTS`. They build their own Blueprints, Widget Blueprints and data assets in `/Temp` packages marked
 `PKG_InMemoryOnly`, so they never touch project content or the JSON folder.
 
@@ -970,17 +847,9 @@ under `JsonBlueprintSync.AssetMerge.*`. They are compiled only with
 | `DataAsset` | Blueprint data asset class: capture, apply, class-only variables and components rejected, reset |
 | `InheritedComponent` | child override created through the inheritable component handler, exported as a delta, reset back to the parent |
 | `Widget` | widgets and slots captured, applied to the Designer templates and the compiled tree, reset, unknown widget rejected |
-| `AssetMerge.Parse` | format and asset lines, sections with and without lines, `[!ignored]`, ` = ` inside a map key and an escaped quote, CRLF, conflict markers by line, each parse error |
-| `AssetMerge.Diff` | Set, Add, Remove, Reset, equal lines, `!notdecoded`, `!graph`, added and removed objects, changed class, `[!ignored]` skipped, row order; a `(type)` change makes rows of the instanced struct's equal member lines |
-| `AssetMerge.Files` | project and plugin packages from folders, other files and a top-level `merged.txt` ignored, missing folder |
-| `AssetMerge.Check` | every status of `CheckMergeFile` with a stand-in reader |
-| `AssetMerge.Apply` | `ApplyRows` on a parent Blueprint: Set of a variable, a struct member and a whole struct (`RelativeLocation`) on an SCS template, Reset of a member to the struct default; the child inherits, keeps its overridden member and its ICH template's override; each failing row (bad value, unknown property or member, member of a non-struct, array element past the end, not editable, unknown object, unknown map, not applicable) fails alone; `Tags.Num` resizes and propagates, a quoted name with escapes is unquoted; a second apply is Unchanged; Reset of a variable the native parent lacks; Reset in the child takes the parent's value and template |
-| `AssetMerge.ApplyContainers` | on a parent Blueprint with an array of doubles and of `FMargin`, a `TMap<FName, FMargin>`, a `TSet<FName>` and an `FInstancedStruct`: array grow, new element, struct member of an element, map entry member, new entry, `()` entry, set add and remove, instanced struct member; the child follows and keeps its own entry member; path errors (name after an array, index after a map, value for a set element, Remove of an array element, member the type lacks); a second apply is Unchanged; type change, member of the new type, Reset of an old member (Unchanged), unknown type, entry removal, shrink, Reset of an element that is gone; Resets in the child: entry member, entry or set element the parent doesn't have (removed), neither has (Unchanged), array size, instanced struct type |
-| `AssetMerge.ApplyDataAsset` | Set and Reset on a data asset, the class default untouched, a class-only variable refused |
-| `AssetMerge.ApplyWidget` | a canvas slot member two structs deep (`LayoutData.Offsets.Left`), a slot Reset, a widget value |
 
 What the tests do **not** cover: the subsystem itself (save guard, Detect, start-up and saved hashes, Two Way auto-apply, undo and
-redo, rename, delete), the tab, the commandlet, the merge subsystem and the Asset Merges tab, and native (C++)
+redo, rename, delete), the tab, the commandlet, and native (C++)
 components. Its decision rules are covered through `ChooseBase` and
 `CanAutoApply`. [ManualTests.md](ManualTests.md) covers those by hand.
 
