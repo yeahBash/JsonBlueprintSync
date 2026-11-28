@@ -23,7 +23,7 @@ Blueprints and Widget Blueprints are not synced.
 1. Add the plugin to the project's `Plugins/` folder, for example as a git submodule:
 
    ```
-   git submodule add https://github.com/yeahBash/JsonBlueprintSync.git Plugins/JsonDataAssetSync
+   git submodule add https://github.com/yeahBash/JsonDataAssetSync.git Plugins/JsonDataAssetSync
    ```
 
    Teammates then need `git clone --recurse-submodules`, or `git submodule update --init` in an existing clone.
