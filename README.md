@@ -362,6 +362,44 @@ wscript.exe "<absolute path to>\Plugins\JsonBlueprintSync\Tools\uasset-diff.js" 
 It needs the `unrealassetjson.path` setting above, and finds Git for Windows and TortoiseGitMerge through their install
 locations in the registry. If the conversion fails, a message box shows the error.
 
+## Git merge for assets
+
+Git can't merge two versions of a `.uasset`. `Tools/uasset-merge.js`, set as TortoiseGit's merge tool for assets, lets you
+merge their merge text in TortoiseGitMerge instead. The result is saved next to the project, not over the asset, and the
+plugin applies it in the editor.
+
+In **TortoiseGit > Settings > Diff Viewer > Merge Tool > Advanced**, add `.uasset` and `.umap` with:
+
+```
+wscript.exe "<absolute path to>\Plugins\JsonBlueprintSync\Tools\uasset-merge.js" %base %mine %theirs %merged %bname %yname %tname //E:javascript
+```
+
+When a merge leaves an asset conflicted, **Edit conflicts** on it in TortoiseGit:
+
+1. The script writes the merge text of the three versions to the asset's merge folder,
+   `<Project>/Saved/JsonBlueprintSync/Merge/<package path>/`, for example `Saved/JsonBlueprintSync/Merge/Game/Features/UI/WBP_HUD/`
+   for `/Game/Features/UI/WBP_HUD`. A plugin's assets go under the plugin's name.
+2. It opens TortoiseGitMerge on `base.txt`, `ours.txt` and `theirs.txt`. Resolve the conflicts and save: the result goes to
+   `merged.txt` in the merge folder.
+3. The `.uasset` in the working tree stays as it is, which is ours. `info.json` in the merge folder records the asset and the
+   SHA-256 of the three versions.
+
+If the merge folder already holds a `merged.txt`, the script asks whether to start over. Yes writes the texts again and deletes
+`merged.txt`; No changes nothing.
+
+The merge is finished when you delete the asset's merge folder. Until then a pre-commit hook refuses commits, because
+committing would keep ours' `.uasset` and lose theirs' changes. Call the hook from `.git/hooks/pre-commit` in the repository:
+
+```
+#!/bin/sh
+sh "<path from the repository root to>/Plugins/JsonBlueprintSync/Tools/pre-commit-merges.sh" || exit 1
+```
+
+Don't use `core.hooksPath` for it: that turns off the hooks Git LFS keeps in `.git/hooks`.
+
+The plugin doesn't apply `merged.txt` yet (planned). Until it does, set the values from `merged.txt` by hand in the editor,
+then delete the merge folder.
+
 ## Limitations
 
 - Only default values are stored. Graph logic, functions and variables themselves are not. For Widget Blueprints, the widget
