@@ -23,6 +23,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "StructUtils/InstancedStruct.h"
 #include "UObject/Package.h"
 #include "WidgetBlueprint.h"
 
@@ -84,6 +85,81 @@ namespace JsonBlueprintSync::AssetMergeTests
 	FEdGraphPinType StructPin(UScriptStruct* Struct)
 	{
 		return FEdGraphPinType(UEdGraphSchema_K2::PC_Struct, NAME_None, Struct, EPinContainerType::None, false, FEdGraphTerminalType());
+	}
+
+	FEdGraphPinType ContainerPin(FName Category, FName SubCategory, UObject* SubCategoryObject, EPinContainerType Container,
+		const FEdGraphTerminalType& Value = FEdGraphTerminalType())
+	{
+		return FEdGraphPinType(Category, SubCategory, SubCategoryObject, Container, false, Value);
+	}
+
+	FString MarginText(const FMargin& Margin)
+	{
+		return FString::Printf(TEXT("(%g, %g, %g, %g)"), Margin.Left, Margin.Top, Margin.Right, Margin.Bottom);
+	}
+
+	/** A map's keys and values as one line, sorted by key. */
+	FString BoxesText(const TMap<FName, FMargin>* Boxes)
+	{
+		if (!Boxes)
+		{
+			return TEXT("none");
+		}
+		TArray<FName> Keys;
+		Boxes->GetKeys(Keys);
+		Keys.Sort(FNameLexicalLess());
+		FString Text;
+		for (const FName& Key : Keys)
+		{
+			Text += FString::Printf(TEXT("%s%s=%s"), Text.IsEmpty() ? TEXT("") : TEXT(" "), *Key.ToString(), *MarginText(Boxes->FindChecked(Key)));
+		}
+		return Text;
+	}
+
+	FString LabelsText(const TSet<FName>* Labels)
+	{
+		if (!Labels)
+		{
+			return TEXT("none");
+		}
+		TArray<FString> Names;
+		for (const FName& Name : *Labels)
+		{
+			Names.Add(Name.ToString());
+		}
+		Names.Sort();
+		return FString::Join(Names, TEXT(" "));
+	}
+
+	FString NumbersText(const TArray<double>* Numbers)
+	{
+		if (!Numbers)
+		{
+			return TEXT("none");
+		}
+		TArray<FString> Texts;
+		for (double Number : *Numbers)
+		{
+			Texts.Add(FString::Printf(TEXT("%g"), Number));
+		}
+		return FString::Join(Texts, TEXT(" "));
+	}
+
+	FString InstanceText(const FInstancedStruct* Instance)
+	{
+		if (!Instance || !Instance->IsValid())
+		{
+			return TEXT("none");
+		}
+		if (const FMargin* Margin = Instance->GetPtr<FMargin>())
+		{
+			return TEXT("Margin") + MarginText(*Margin);
+		}
+		if (const FVector2D* Vector = Instance->GetPtr<FVector2D>())
+		{
+			return FString::Printf(TEXT("Vector2D(%g, %g)"), Vector->X, Vector->Y);
+		}
+		return Instance->GetScriptStruct()->GetName();
 	}
 
 	/** A row for an object of a test asset; a null Object gives an object path that doesn't exist. */
@@ -279,6 +355,34 @@ bool FJsonBlueprintSyncAssetMergeDiffTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Order"), Rows.Num() == 9 && Rows[0].Path == TEXT("Pair.B") && Rows[4].Path == TEXT("Name") && Rows[8].Object == TEXT("/Game/Test/DA.DA:Old"));
 
 	TestEqual(TEXT("Same text: no rows"), DiffMergeText(Current, Current).Num(), 0);
+
+	// An instanced struct whose type changes: its member lines become rows even where they read the same, since the new
+	// type starts from other values. Members of other values that read the same give no rows.
+	FMergeText OldType;
+	FMergeText NewType;
+	TestTrue(TEXT("Old type parses"), ParseMergeText(Lines({
+		TEXT("# F"),
+		TEXT("[/A.A] /C.C"),
+		TEXT("Inst.(type) = /Script/M.S1"),
+		TEXT("Inst.B = 1"),
+		TEXT("Inst.C = 2"),
+		TEXT("Other.B = 1"),
+	}), OldType));
+	TestTrue(TEXT("New type parses"), ParseMergeText(Lines({
+		TEXT("# F"),
+		TEXT("[/A.A] /C.C"),
+		TEXT("Inst.(type) = /Script/M.S2"),
+		TEXT("Inst.B = 1"),
+		TEXT("Other.B = 1"),
+	}), NewType));
+	const TArray<FMergeRow> Retyped = DiffMergeText(OldType, NewType);
+	TestEqual(TEXT("Retyped rows"), Retyped.Num(), 3);
+	TestTrue(TEXT("Type row first"), Retyped.Num() == 3 && Retyped[0].Path == TEXT("Inst.(type)") && Retyped[0].Action == EMergeAction::Set);
+	const FMergeRow* SameMember = FindRow(Retyped, TEXT("/A.A"), TEXT("Inst.B"));
+	TestTrue(TEXT("Same member of a retyped struct is a row"), SameMember && SameMember->Action == EMergeAction::Set && SameMember->Merged == FString(TEXT("1")));
+	const FMergeRow* OldMember = FindRow(Retyped, TEXT("/A.A"), TEXT("Inst.C"));
+	TestTrue(TEXT("Old type's member resets"), OldMember && OldMember->Action == EMergeAction::Reset);
+	TestNull(TEXT("Other values stay quiet"), FindRow(Retyped, TEXT("/A.A"), TEXT("Other.B")));
 	return true;
 }
 
@@ -428,6 +532,7 @@ bool FJsonBlueprintSyncAssetMergeApplyTest::RunTest(const FString& Parameters)
 		MakeRow(nullptr, TEXT("Speed"), EMergeAction::Set, TEXT("1")),
 		MakeRow(ParentDefaults, TEXT("Map[\"a\"]"), EMergeAction::Add, TEXT("(added)")),
 		NotApplicable,
+		MakeRow(ParentDefaults, TEXT("Tags[0]"), EMergeAction::Set, TEXT("\"A \\\"b\\\"\"")),
 	};
 	const TArray<FRowResult> Results = ApplyRows(Parent, Rows);
 	TestEqual(TEXT("One result per row"), Results.Num(), Rows.Num());
@@ -440,19 +545,24 @@ bool FJsonBlueprintSyncAssetMergeApplyTest::RunTest(const FString& Parameters)
 	TestResult(*this, TEXT("Unknown property"), Results, 6, ERowResult::Failed);
 	TestResult(*this, TEXT("Unknown struct member"), Results, 7, ERowResult::Failed);
 	TestResult(*this, TEXT("Member of a value that isn't a struct"), Results, 8, ERowResult::Failed);
-	TestResult(*this, TEXT("Array element"), Results, 9, ERowResult::Failed);
-	TestResult(*this, TEXT("Array size"), Results, 10, ERowResult::Failed);
+	TestResult(*this, TEXT("Array element past the end"), Results, 9, ERowResult::Failed);
+	TestResult(*this, TEXT("Array size"), Results, 10, ERowResult::Applied);
 	TestResult(*this, TEXT("Not editable"), Results, 11, ERowResult::Failed);
 	TestResult(*this, TEXT("Unknown object"), Results, 12, ERowResult::Failed);
-	TestResult(*this, TEXT("Map entry"), Results, 13, ERowResult::Failed);
+	TestResult(*this, TEXT("Unknown map"), Results, 13, ERowResult::Failed);
 	TestResult(*this, TEXT("Not applicable"), Results, 14, ERowResult::Failed);
+	TestResult(*this, TEXT("Quoted name in a new element"), Results, 15, ERowResult::Applied);
 	if (Results.Num() == Rows.Num())
 	{
 		TestTrue(TEXT("Unknown property says so"), Results[6].Message.Contains(TEXT("renamed or removed")));
-		TestTrue(TEXT("Arrays aren't supported yet"), Results[9].Message.Contains(TEXT("can't be applied yet")) && Results[10].Message == Results[9].Message);
+		TestTrue(TEXT("An element past the end asks for the size first"), Results[9].Message.Contains(TEXT("Num")));
 		TestTrue(TEXT("Not editable says so"), Results[11].Message.Contains(TEXT("Details panel")));
 		TestEqual(TEXT("Not applicable gives the reason"), Results[14].Message, NotApplicable.Reason);
 	}
+	TestEqual(TEXT("Parent Tags resized"), CastChecked<AActor>(ParentDefaults)->Tags.Num(), 1);
+	TestEqual(TEXT("Child Tags follow"), CastChecked<AActor>(ChildDefaults)->Tags.Num(), 1);
+	TestEqual(TEXT("Parent tag unquoted"), CastChecked<AActor>(ParentDefaults)->Tags.IsEmpty() ? FString() : CastChecked<AActor>(ParentDefaults)->Tags[0].ToString(),
+		FString(TEXT("A \"b\"")));
 
 	TestEqual(TEXT("Parent Speed"), ReadDouble(ParentDefaults, TEXT("Speed")), 2.5);
 	TestEqual(TEXT("Child inherits Speed"), ReadDouble(ChildDefaults, TEXT("Speed")), 2.5);
@@ -484,6 +594,165 @@ bool FJsonBlueprintSyncAssetMergeApplyTest::RunTest(const FString& Parameters)
 	TestResult(*this, TEXT("Reset a child's component value"), ChildResets, 1, ERowResult::Applied);
 	TestEqual(TEXT("Child Pad.Left from the parent"), ChildPad->Left, 1.f);
 	TestEqual(TEXT("Child AttenuationRadius from the parent's template"), ChildLight->AttenuationRadius, ParentLight->AttenuationRadius);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJsonBlueprintSyncAssetMergeApplyContainersTest, "JsonBlueprintSync.AssetMerge.ApplyContainers", JsonBlueprintSync::AssetMergeTests::TestFlags)
+bool FJsonBlueprintSyncAssetMergeApplyContainersTest::RunTest(const FString& Parameters)
+{
+	using namespace JsonBlueprintSync::AssetMerge;
+	using namespace JsonBlueprintSync::AssetMergeTests;
+
+	// A parent Blueprint with an array of doubles, an array of margins, a map of name to margin, a set of names and an
+	// instanced struct.
+	const FString Suffix = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	UBlueprint* Parent = NewBlueprint(AActor::StaticClass(), TEXT("BP_MergeContainers_") + Suffix);
+	FEdGraphTerminalType MarginValue;
+	MarginValue.TerminalCategory = UEdGraphSchema_K2::PC_Struct;
+	MarginValue.TerminalSubCategoryObject = FMargin::StaticStruct();
+	FBlueprintEditorUtils::AddMemberVariable(Parent, TEXT("Numbers"), ContainerPin(UEdGraphSchema_K2::PC_Real, UEdGraphSchema_K2::PC_Double, nullptr, EPinContainerType::Array));
+	FBlueprintEditorUtils::AddMemberVariable(Parent, TEXT("Pads"), ContainerPin(UEdGraphSchema_K2::PC_Struct, NAME_None, FMargin::StaticStruct(), EPinContainerType::Array));
+	FBlueprintEditorUtils::AddMemberVariable(Parent, TEXT("Boxes"), ContainerPin(UEdGraphSchema_K2::PC_Name, NAME_None, nullptr, EPinContainerType::Map, MarginValue));
+	FBlueprintEditorUtils::AddMemberVariable(Parent, TEXT("Labels"), ContainerPin(UEdGraphSchema_K2::PC_Name, NAME_None, nullptr, EPinContainerType::Set));
+	FBlueprintEditorUtils::AddMemberVariable(Parent, TEXT("Inst"), StructPin(FInstancedStruct::StaticStruct()));
+	FKismetEditorUtilities::CompileBlueprint(Parent, EBlueprintCompileOptions::SkipGarbageCollection);
+	UObject* P = Parent->GeneratedClass->GetDefaultObject();
+	TArray<double>* PNumbers = FindValue<TArray<double>>(P, TEXT("Numbers"));
+	TArray<FMargin>* PPads = FindValue<TArray<FMargin>>(P, TEXT("Pads"));
+	TMap<FName, FMargin>* PBoxes = FindValue<TMap<FName, FMargin>>(P, TEXT("Boxes"));
+	TSet<FName>* PLabels = FindValue<TSet<FName>>(P, TEXT("Labels"));
+	FInstancedStruct* PInst = FindValue<FInstancedStruct>(P, TEXT("Inst"));
+	if (!TestTrue(TEXT("Parent variables"), PNumbers && PPads && PBoxes && PLabels && PInst))
+	{
+		return false;
+	}
+	*PNumbers = { 1.0, 2.0 };
+	*PPads = { FMargin(1.f) };
+	PBoxes->Add(TEXT("a"), FMargin(1.f, 2.f, 3.f, 4.f));
+	PBoxes->Add(TEXT("b"), FMargin(5.f));
+	*PLabels = { TEXT("X"), TEXT("Y") };
+	PInst->InitializeAs<FMargin>(FMargin(1.f, 2.f, 3.f, 4.f));
+
+	// A child that overrides one member of one map entry.
+	UBlueprint* Child = NewBlueprint(Parent->GeneratedClass, TEXT("BP_MergeContainersChild_") + Suffix);
+	UObject* C = Child->GeneratedClass->GetDefaultObject();
+	TArray<double>* CNumbers = FindValue<TArray<double>>(C, TEXT("Numbers"));
+	TArray<FMargin>* CPads = FindValue<TArray<FMargin>>(C, TEXT("Pads"));
+	TMap<FName, FMargin>* CBoxes = FindValue<TMap<FName, FMargin>>(C, TEXT("Boxes"));
+	TSet<FName>* CLabels = FindValue<TSet<FName>>(C, TEXT("Labels"));
+	FInstancedStruct* CInst = FindValue<FInstancedStruct>(C, TEXT("Inst"));
+	if (!TestTrue(TEXT("Child variables"), CNumbers && CPads && CBoxes && CLabels && CInst)
+		|| !TestEqual(TEXT("Child starts with the parent's map"), BoxesText(CBoxes), BoxesText(PBoxes)))
+	{
+		return false;
+	}
+	CBoxes->FindChecked(TEXT("b")).Left = 9.f;
+
+	const TArray<FMergeRow> Rows = {
+		MakeRow(P, TEXT("Numbers.Num"), EMergeAction::Set, TEXT("3")),
+		MakeRow(P, TEXT("Numbers[2]"), EMergeAction::Set, TEXT("7")),
+		MakeRow(P, TEXT("Numbers[5]"), EMergeAction::Set, TEXT("1")),
+		MakeRow(P, TEXT("Pads[0].Top"), EMergeAction::Set, TEXT("8")),
+		MakeRow(P, TEXT("Boxes[\"a\"].Left"), EMergeAction::Set, TEXT("6")),
+		MakeRow(P, TEXT("Boxes[\"b\"].Top"), EMergeAction::Set, TEXT("7")),
+		MakeRow(P, TEXT("Boxes[\"c\"].Right"), EMergeAction::Set, TEXT("3")),
+		MakeRow(P, TEXT("Boxes[\"e\"]"), EMergeAction::Set, TEXT("()")),
+		MakeRow(P, TEXT("Labels[\"W\"]"), EMergeAction::Add, TEXT("(added)")),
+		MakeRow(P, TEXT("Labels[\"X\"]"), EMergeAction::Remove, TEXT("(removed)")),
+		MakeRow(P, TEXT("Inst.Top"), EMergeAction::Set, TEXT("9")),
+		MakeRow(P, TEXT("Inst.Nope"), EMergeAction::Set, TEXT("1")),
+		MakeRow(P, TEXT("Numbers.Nope"), EMergeAction::Set, TEXT("1")),
+		MakeRow(P, TEXT("Boxes[0]"), EMergeAction::Set, TEXT("1")),
+		MakeRow(P, TEXT("Labels[\"Q\"]"), EMergeAction::Set, TEXT("1")),
+		MakeRow(P, TEXT("Numbers[0]"), EMergeAction::Remove, TEXT("(removed)")),
+	};
+	const TArray<FRowResult> Results = ApplyRows(Parent, Rows);
+	TestEqual(TEXT("One result per row"), Results.Num(), Rows.Num());
+	TestResult(*this, TEXT("Grow an array"), Results, 0, ERowResult::Applied);
+	TestResult(*this, TEXT("Set a new element"), Results, 1, ERowResult::Applied);
+	TestResult(*this, TEXT("Element past the end"), Results, 2, ERowResult::Failed);
+	TestResult(*this, TEXT("Member of an array element"), Results, 3, ERowResult::Applied);
+	TestResult(*this, TEXT("Member of a map entry"), Results, 4, ERowResult::Applied);
+	TestResult(*this, TEXT("Member of an entry the child overrides elsewhere"), Results, 5, ERowResult::Applied);
+	TestResult(*this, TEXT("Member of a new entry"), Results, 6, ERowResult::Applied);
+	TestResult(*this, TEXT("New entry with default members"), Results, 7, ERowResult::Applied);
+	TestResult(*this, TEXT("Add to a set"), Results, 8, ERowResult::Applied);
+	TestResult(*this, TEXT("Remove from a set"), Results, 9, ERowResult::Applied);
+	TestResult(*this, TEXT("Member of an instanced struct"), Results, 10, ERowResult::Applied);
+	TestResult(*this, TEXT("Member the instanced struct's type doesn't have"), Results, 11, ERowResult::Failed);
+	TestResult(*this, TEXT("Array followed by a name"), Results, 12, ERowResult::Failed);
+	TestResult(*this, TEXT("Map followed by an index"), Results, 13, ERowResult::Failed);
+	TestResult(*this, TEXT("Set element with a value"), Results, 14, ERowResult::Failed);
+	TestResult(*this, TEXT("Remove an array element"), Results, 15, ERowResult::Failed);
+
+	TestEqual(TEXT("Parent Numbers"), NumbersText(PNumbers), FString(TEXT("1 2 7")));
+	TestEqual(TEXT("Child Numbers follow"), NumbersText(CNumbers), FString(TEXT("1 2 7")));
+	TestEqual(TEXT("Parent Pads"), PPads->Num() == 1 ? MarginText((*PPads)[0]) : FString(), MarginText(FMargin(1.f, 8.f, 1.f, 1.f)));
+	TestEqual(TEXT("Child Pads follow"), CPads->Num() == 1 ? MarginText((*CPads)[0]) : FString(), MarginText(FMargin(1.f, 8.f, 1.f, 1.f)));
+	TestEqual(TEXT("Parent Boxes"), BoxesText(PBoxes),
+		FString(TEXT("a=(6, 2, 3, 4) b=(5, 7, 5, 5) c=(0, 0, 3, 0) e=(0, 0, 0, 0)")));
+	TestEqual(TEXT("Child Boxes follow and keep their own b.Left"), BoxesText(CBoxes),
+		FString(TEXT("a=(6, 2, 3, 4) b=(9, 7, 5, 5) c=(0, 0, 3, 0) e=(0, 0, 0, 0)")));
+	TestEqual(TEXT("Parent Labels"), LabelsText(PLabels), FString(TEXT("W Y")));
+	TestEqual(TEXT("Child Labels follow"), LabelsText(CLabels), FString(TEXT("W Y")));
+	TestEqual(TEXT("Parent Inst"), InstanceText(PInst), FString(TEXT("Margin(1, 9, 3, 4)")));
+	TestEqual(TEXT("Child Inst follows"), InstanceText(CInst), FString(TEXT("Margin(1, 9, 3, 4)")));
+
+	const TArray<FRowResult> Again = ApplyRows(Parent, Rows);
+	for (int32 Index : { 0, 1, 3, 4, 5, 6, 7, 8, 9, 10 })
+	{
+		TestResult(*this, TEXT("Second apply"), Again, Index, ERowResult::Unchanged);
+	}
+
+	// A type change: the members become the new type's defaults, then the member rows that follow set them.
+	const TArray<FRowResult> Retype = ApplyRows(Parent, {
+		MakeRow(P, TEXT("Inst.(type)"), EMergeAction::Set, TEXT("/Script/CoreUObject.Vector2D")),
+		MakeRow(P, TEXT("Inst.X"), EMergeAction::Set, TEXT("4")),
+		MakeRow(P, TEXT("Inst.Top"), EMergeAction::Reset),
+		MakeRow(P, TEXT("Inst.(type)"), EMergeAction::Set, TEXT("/Script/Nope.Nope")),
+		MakeRow(P, TEXT("Boxes[\"a\"]"), EMergeAction::Remove, TEXT("(removed)")),
+		MakeRow(P, TEXT("Numbers.Num"), EMergeAction::Set, TEXT("1")),
+		MakeRow(P, TEXT("Numbers[2]"), EMergeAction::Reset) });
+	TestResult(*this, TEXT("Change the type"), Retype, 0, ERowResult::Applied);
+	TestResult(*this, TEXT("Member of the new type"), Retype, 1, ERowResult::Applied);
+	TestResult(*this, TEXT("Reset a member of the old type"), Retype, 2, ERowResult::Unchanged);
+	TestResult(*this, TEXT("Unknown type"), Retype, 3, ERowResult::Failed);
+	TestResult(*this, TEXT("Remove a map entry"), Retype, 4, ERowResult::Applied);
+	TestResult(*this, TEXT("Shrink an array"), Retype, 5, ERowResult::Applied);
+	TestResult(*this, TEXT("Reset an element that is gone"), Retype, 6, ERowResult::Unchanged);
+	TestEqual(TEXT("Parent Inst retyped"), InstanceText(PInst), FString(TEXT("Vector2D(4, 0)")));
+	TestEqual(TEXT("Child Inst follows the type"), InstanceText(CInst), FString(TEXT("Vector2D(4, 0)")));
+	TestEqual(TEXT("Parent Boxes without a"), BoxesText(PBoxes), FString(TEXT("b=(5, 7, 5, 5) c=(0, 0, 3, 0) e=(0, 0, 0, 0)")));
+	TestEqual(TEXT("Child Boxes without a"), BoxesText(CBoxes), FString(TEXT("b=(9, 7, 5, 5) c=(0, 0, 3, 0) e=(0, 0, 0, 0)")));
+	TestEqual(TEXT("Parent Numbers shrunk"), NumbersText(PNumbers), FString(TEXT("1")));
+	TestEqual(TEXT("Child Numbers follow the size"), NumbersText(CNumbers), FString(TEXT("1")));
+
+	// Resets in the child take the parent's value at the same place, and drop what the parent doesn't have.
+	CBoxes->Add(TEXT("own"), FMargin(2.f));
+	CLabels->Add(TEXT("Z"));
+	*CNumbers = { 5.0, 6.0 };
+	CInst->InitializeAs<FMargin>(FMargin(3.f));
+	const TArray<FRowResult> Resets = ApplyRows(Child, {
+		MakeRow(C, TEXT("Boxes[\"b\"].Left"), EMergeAction::Reset),
+		MakeRow(C, TEXT("Boxes[\"zz\"].Left"), EMergeAction::Reset),
+		MakeRow(C, TEXT("Boxes[\"own\"].Top"), EMergeAction::Reset),
+		MakeRow(C, TEXT("Labels[\"Z\"]"), EMergeAction::Reset),
+		MakeRow(C, TEXT("Labels[\"X\"]"), EMergeAction::Reset),
+		MakeRow(C, TEXT("Numbers.Num"), EMergeAction::Reset),
+		MakeRow(C, TEXT("Numbers[0]"), EMergeAction::Reset),
+		MakeRow(C, TEXT("Inst.(type)"), EMergeAction::Reset) });
+	TestResult(*this, TEXT("Reset an entry member to the parent's"), Resets, 0, ERowResult::Applied);
+	TestResult(*this, TEXT("Reset an entry neither has"), Resets, 1, ERowResult::Unchanged);
+	TestResult(*this, TEXT("Reset an entry the parent doesn't have"), Resets, 2, ERowResult::Applied);
+	TestResult(*this, TEXT("Reset a set element the parent doesn't have"), Resets, 3, ERowResult::Applied);
+	TestResult(*this, TEXT("Reset a set element neither has"), Resets, 4, ERowResult::Unchanged);
+	TestResult(*this, TEXT("Reset an array's size"), Resets, 5, ERowResult::Applied);
+	TestResult(*this, TEXT("Reset an element that the size reset brought back"), Resets, 6, ERowResult::Unchanged);
+	TestResult(*this, TEXT("Reset an instanced struct's type"), Resets, 7, ERowResult::Applied);
+	TestEqual(TEXT("Child Boxes from the parent"), BoxesText(CBoxes), BoxesText(PBoxes));
+	TestEqual(TEXT("Child Labels from the parent"), LabelsText(CLabels), LabelsText(PLabels));
+	TestEqual(TEXT("Child Numbers from the parent"), NumbersText(CNumbers), NumbersText(PNumbers));
+	TestEqual(TEXT("Child Inst from the parent"), InstanceText(CInst), FString(TEXT("Vector2D(4, 0)")));
 	return true;
 }
 

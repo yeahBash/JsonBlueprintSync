@@ -153,6 +153,12 @@ namespace JsonBlueprintSync::AssetMerge
 	/** CheckMergeFile for every merge file of the project, with the reader from git config. */
 	TArray<FMergeFile> CheckMergeFiles();
 
+	/**
+	 * CheckMergeFile for the given merge files, with the reader from git config. bCheckUnsaved: a loaded asset with unsaved
+	 * changes gets the UnsavedChanges status; without it, the status is worked out from the saved file alone.
+	 */
+	TArray<FMergeFile> CheckMergeFiles(TConstArrayView<FMergeFileLocation> Locations, bool bCheckUnsaved);
+
 	enum class ERowResult : uint8
 	{
 		Applied,
@@ -171,14 +177,16 @@ namespace JsonBlueprintSync::AssetMerge
 	};
 
 	/**
-	 * Writes Set and Reset rows to the loaded objects of Asset's package, each value by its path (struct members one by one), the
-	 * way the Details panel does: archetype instances that still have the old value at that path (child Blueprints, data assets of
-	 * the class, placed actors) get the new value too, and overrides are kept. A reset takes the value at the same path in the
-	 * object's archetype, which is what the saved file is compared with. Only values the Details panel can edit are written.
+	 * Writes Set, Add, Remove and Reset rows to the loaded objects of Asset's package, each value by its path (struct members,
+	 * array elements, map entries, set elements and instanced struct members one by one), the way the Details panel does:
+	 * archetype instances that still have the old value at that path (child Blueprints, data assets of the class, placed actors)
+	 * get the new value too, and overrides are kept. A reset takes the value at the same path in the object's archetype, which is
+	 * what the saved file is compared with; a map entry or set element the archetype doesn't have is removed. "Array.Num" resizes
+	 * the array and "Instance.(type)" changes the struct type; the rows for the members follow them. Only values the Details panel
+	 * can edit are written.
 	 *
-	 * Each row on its own: a row that fails is reported and skipped, the others are still written. Arrays, maps, sets and instanced
-	 * structs fail for now. Marks the asset modified if anything was written. No transaction, compile or save: the caller does those.
-	 * Returns one result per row.
+	 * Each row on its own: a row that fails is reported and skipped, the others are still written. Marks the asset modified if
+	 * anything was written. No transaction, compile or save: the caller does those. Returns one result per row.
 	 */
 	TArray<FRowResult> ApplyRows(UObject* Asset, TConstArrayView<FMergeRow> Rows);
 }
