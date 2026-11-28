@@ -376,7 +376,7 @@ namespace JsonBlueprintSync::AssetMerge
 		int32 ReturnCode = -1;
 		FString StdOut;
 		FString StdErr;
-		if (!FPlatformProcess::ExecProcess(TEXT("git"), TEXT("config --get unrealassetjson.path"), &ReturnCode, &StdOut, &StdErr, *ProjectDir))
+		if (!FPlatformProcess::ExecProcess(TEXT("git"), TEXT("config --get uassreader.path"), &ReturnCode, &StdOut, &StdErr, *ProjectDir))
 		{
 			OutError = TEXT("Couldn't run git. Is it installed and on PATH?");
 			return false;
@@ -384,12 +384,12 @@ namespace JsonBlueprintSync::AssetMerge
 		OutReader = StdOut.TrimStartAndEnd();
 		if (ReturnCode != 0 || OutReader.IsEmpty())
 		{
-			OutError = TEXT("Set the reader's path with: git config unrealassetjson.path <path to UnrealAssetJson.exe>");
+			OutError = TEXT("Set the reader's path with: git config --global uassreader.path <path to UAssReader.exe>");
 			return false;
 		}
 		if (!FPaths::FileExists(OutReader))
 		{
-			OutError = FString::Printf(TEXT("The reader set in git config unrealassetjson.path doesn't exist: %s"), *OutReader);
+			OutError = FString::Printf(TEXT("The reader set in git config uassreader.path doesn't exist: %s"), *OutReader);
 			return false;
 		}
 		return true;

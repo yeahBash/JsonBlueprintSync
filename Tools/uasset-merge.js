@@ -1,5 +1,5 @@
 // TortoiseGit merge tool for .uasset and .umap files. It doesn't merge the asset: it writes the
-// UnrealAssetJson merge text of base, ours and theirs to a temporary folder and opens
+// UAssReader merge text of base, ours and theirs to a temporary folder and opens
 // TortoiseGitMerge on them. The result goes to merged.txt in the asset's merge folder,
 // <Project>/Saved/JsonBlueprintSync/Merge/<package path>/, never over the asset; the .uasset in
 // the working tree stays ours. The plugin compares merged.txt with the asset in the editor and
@@ -7,7 +7,8 @@
 //
 // Setup: TortoiseGit > Settings > Diff Viewer > Merge Tool > Advanced, add .uasset and .umap with
 //   wscript.exe "<path to>\Tools\uasset-merge.js" %base %mine %theirs %merged %bname %yname %tname //E:javascript
-// and the git config from the plugin README (unrealassetjson.path).
+// and the git diff setup from the UAssReader README (uassreader.path and diff.unreal.textconv):
+// the texts are made with the same textconv command as git diff.
 //
 // Runs under wscript, so no console window opens. Errors show in a message box.
 
@@ -65,7 +66,6 @@ var BaseName = WScript.Arguments.length > 4 ? WScript.Arguments(4) : "Base";
 var MineName = WScript.Arguments.length > 5 ? WScript.Arguments(5) : "Ours";
 var TheirsName = WScript.Arguments.length > 6 ? WScript.Arguments(6) : "Theirs";
 
-var Tools = Fso.GetParentFolderName(WScript.ScriptFullName);
 var Sh = RegRead("HKLM\\SOFTWARE\\GitForWindows\\InstallPath", "C:\\Program Files\\Git") + "\\bin\\sh.exe";
 var Merge = RegRead("HKLM\\SOFTWARE\\TortoiseGit\\TMergePath", "C:\\Program Files\\TortoiseGit\\bin\\TortoiseGitMerge.exe");
 if (!Fso.FileExists(Sh))
@@ -177,6 +177,22 @@ function Cleanup()
 	catch (e) {}
 }
 
+// The textconv command of the diff setup, e.g. sh "D:/.../UAssReader/Tools/uasset-textconv.sh". Git
+// runs it as a shell command with the file appended; so does Convert, with the output file too.
+function GetTextConv()
+{
+	var Out = Temp + "\\textconv.txt";
+	Shell.Run(Quote(Sh) + " -c " + Quote("git config --get diff.unreal.textconv > " + SingleQuote(Out)), 0, true);
+	var Command = Fso.FileExists(Out) ? ReadText(Out).replace(/\s+$/, "") : "";
+	if (!Command)
+	{
+		Cleanup();
+		Fail("git config diff.unreal.textconv isn't set in " + Repository + ".\nSet up the git diff for assets as the UAssReader README says.");
+	}
+	return Command;
+}
+var TextConv = GetTextConv();
+
 // An added or deleted file comes as an empty file: its text is empty.
 function Convert(File, Text)
 {
@@ -190,13 +206,14 @@ function Convert(File, Text)
 		Fso.CreateTextFile(Text, true).Close();
 		return;
 	}
-	var Command = "sh " + SingleQuote(Tools + "\\uasset-textconv.sh") + " " + SingleQuote(File) + " " + SingleQuote(Text);
-	var Exit = Shell.Run(Quote(Sh) + " -c " + Quote(Command + " 2>" + SingleQuote(ErrorLog)), 0, true);
+	var Command = TextConv + " " + SingleQuote(File) + " " + SingleQuote(Text);
+	// Double quotes in the textconv (a path with spaces) are escaped for the Windows command line.
+	var Exit = Shell.Run(Quote(Sh) + " -c " + Quote((Command + " 2>" + SingleQuote(ErrorLog)).replace(/"/g, "\\\"")), 0, true);
 	if (Exit != 0)
 	{
 		var Message = Fso.FileExists(ErrorLog) && Fso.GetFile(ErrorLog).Size > 0 ? ReadText(ErrorLog) : "exit code " + Exit;
 		Cleanup();
-		Fail("uasset-textconv.sh failed on " + File + ":\n" + Message);
+		Fail("The textconv (" + TextConv + ") failed on " + File + ":\n" + Message);
 	}
 }
 Convert(Base, Temp + "\\base.txt");

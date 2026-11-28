@@ -3,7 +3,7 @@
 #include "CoreMinimal.h"
 
 /**
- * Merges of assets made outside the editor: the TortoiseGit merge tool (Tools/uasset-merge.js) saves the merged UnrealAssetJson
+ * Merges of assets made outside the editor: the TortoiseGit merge tool (Tools/uasset-merge.js) saves the merged UAssReader
  * merge text of an asset to <Project>/Saved/JsonBlueprintSync/Merge/<package path>/merged.txt. This compares it with the
  * reader's text of the saved asset, key by key, and lists what to change.
  */
@@ -34,7 +34,7 @@ namespace JsonBlueprintSync::AssetMerge
 
 	struct FMergeText
 	{
-		/** From the first line, "# <format>", e.g. "UnrealAssetJson merge text 3". */
+		/** From the first line, "# <format>", e.g. "UAssReader merge text 3". */
 		FString Format;
 		/** From "# Asset: <package>". */
 		FString Asset;
@@ -102,7 +102,7 @@ namespace JsonBlueprintSync::AssetMerge
 	/** Every merged.txt below MergeDir, sorted by package. The folder below MergeDir is the package path. */
 	TArray<FMergeFileLocation> FindMergeFiles(const FString& MergeDir);
 
-	/** The reader's path from git config unrealassetjson.path, read in the project folder. False with a message if not set. */
+	/** The reader's path from git config uassreader.path, read in the project folder. False with a message if not set. */
 	bool FindReader(FString& OutReader, FString& OutError);
 
 	/** Runs the reader with -merge on an asset file and returns its text. False with the reader's output if it failed. */

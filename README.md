@@ -324,49 +324,17 @@ In Git Bash, set `MSYS_NO_PATHCONV=1` so `/Game/...` arguments are not turned in
 
 ## Git diff for assets
 
-`Tools/uasset-textconv.sh` makes `git diff`, `git log -p` and other git commands that diff show the values stored in a `.uasset` or `.umap`
-instead of "Binary files differ". It runs UnrealAssetJson, a standalone program that reads asset files without the editor or the
-project's code, with `-merge`, and prints its merge text: one line per stored value, under a `[<object path>] <class>` line per
-object. Values the editor rebuilds on every compile or save, and the parts of the file outside the objects (header, tables,
-thumbnails), are a hash line each in an `[!ignored]` section at the end, so every change to the file shows.
+The git and TortoiseGit diff of assets is part of **UAssReader**, a standalone program that reads asset files without the editor
+or the project's code and writes their stored values as merge text, one line per value. Its repository (private, as it is engine
+code) has the program, the scripts (`Tools/uasset-textconv.sh`, `Tools/uasset-diff.js`) and the setup in its README.
 
-Setup, in each clone (local git config, so nothing machine-specific is committed):
-
-```
-git config unrealassetjson.path "D:/Path/To/UnrealAssetJson.exe"
-git config diff.unreal.textconv "sh <absolute path to>/Plugins/JsonBlueprintSync/Tools/uasset-textconv.sh"
-git config diff.unreal.cachetextconv true
-```
-
-and in `.gitattributes`, `diff=unreal` on the asset lines (Git LFS doesn't use the diff attribute):
-
-```
-*.uasset filter=lfs diff=unreal merge=lfs -text
-*.umap   filter=lfs diff=unreal merge=lfs -text
-```
-
-- Files stored with Git LFS are fetched from the local LFS store through `git lfs smudge`. If the object isn't available, the
-  diff shows the LFS pointer.
-- If UnrealAssetJson can't read a file, the diff shows the file's size and SHA-256 instead.
-- `cachetextconv` keeps the text of committed versions in `refs/notes/textconv/unreal`, so `git log -p` reads each version once.
-- In a clone without the setup, the assets diff as binary files, as before.
-
-TortoiseGit's diff doesn't use textconv. For it, `Tools/uasset-diff.js` converts both versions with `uasset-textconv.sh` and opens
-TortoiseGitMerge on the two texts (read-only). In **TortoiseGit > Settings > Diff Viewer > Advanced**, add `.uasset` and `.umap`
-with:
-
-```
-wscript.exe "<absolute path to>\Plugins\JsonBlueprintSync\Tools\uasset-diff.js" %base %mine %bname %yname //E:javascript
-```
-
-It needs the `unrealassetjson.path` setting above, and finds Git for Windows and TortoiseGitMerge through their install
-locations in the registry. If the conversion fails, a message box shows the error.
+The merge below needs that setup: `git config uassreader.path` (best with `--global`) and `git config diff.unreal.textconv`.
 
 ## Git merge for assets
 
 Git can't merge two versions of a `.uasset`. `Tools/uasset-merge.js`, set as TortoiseGit's merge tool for assets, lets you
-merge their merge text in TortoiseGitMerge instead. The result is saved next to the project, not over the asset, and the
-plugin applies it in the editor.
+merge their merge text in TortoiseGitMerge instead. It makes the texts with the textconv of the git diff setup above. The
+result is saved next to the project, not over the asset, and the plugin applies it in the editor.
 
 In **TortoiseGit > Settings > Diff Viewer > Merge Tool > Advanced**, add `.uasset` and `.umap` with:
 
@@ -404,7 +372,7 @@ If it holds merges that aren't done, a notification says "N merge(s) to apply" w
 JSON Sync one says "N Merge(s) to Apply" ("Merges Done" once every merge is done; hidden while there is no merge file). Both open
 **Window > Asset Merges**. Each check runs the reader on every merged asset, so it takes a moment per merge.
 
-The plugin runs the reader (`git config unrealassetjson.path`) on the saved asset and compares its text with `merged.txt` line by
+The plugin runs the reader (`git config uassreader.path`) on the saved asset and compares its text with `merged.txt` line by
 line, so the list is right whichever side's `.uasset` is in the working tree, and also after you saved part of the merge.
 
 On the left are the merge files with their status:

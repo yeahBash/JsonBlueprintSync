@@ -208,7 +208,7 @@ namespace JsonBlueprintSync::AssetMergeTests
 	const TCHAR* CurrentText()
 	{
 		static const FString Text = Lines({
-			TEXT("# UnrealAssetJson merge text 3"),
+			TEXT("# UAssReader merge text 3"),
 			TEXT("# Asset: /Game/Test/DA"),
 			TEXT("[/Game/Test/DA.DA] /Game/Test/BP_Data.BP_Data_C"),
 			TEXT("Pair.B = 4"),
@@ -237,7 +237,7 @@ bool FJsonBlueprintSyncAssetMergeParseTest::RunTest(const FString& Parameters)
 	using namespace JsonBlueprintSync::AssetMergeTests;
 	FMergeText Text;
 	TestTrue(TEXT("Parses"), ParseMergeText(CurrentText(), Text));
-	TestEqual(TEXT("Format"), Text.Format, FString(TEXT("UnrealAssetJson merge text 3")));
+	TestEqual(TEXT("Format"), Text.Format, FString(TEXT("UAssReader merge text 3")));
 	TestEqual(TEXT("Asset"), Text.Asset, FString(TEXT("/Game/Test/DA")));
 	TestEqual(TEXT("Sections"), Text.Sections.Num(), 5);
 	const FMergeSection* Section = Text.FindSection(TEXT("/Game/Test/DA.DA"));
@@ -304,7 +304,7 @@ bool FJsonBlueprintSyncAssetMergeDiffTest::RunTest(const FString& Parameters)
 	FMergeText Merged;
 	TestTrue(TEXT("Current parses"), ParseMergeText(CurrentText(), Current));
 	TestTrue(TEXT("Merged parses"), ParseMergeText(Lines({
-		TEXT("# UnrealAssetJson merge text 3"),
+		TEXT("# UAssReader merge text 3"),
 		TEXT("# Asset: /Game/Test/DA"),
 		TEXT("[/Game/Test/DA.DA] /Game/Test/BP_Data.BP_Data_C"),
 		TEXT("Pair.B = 7"),                              // set

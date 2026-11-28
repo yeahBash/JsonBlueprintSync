@@ -835,12 +835,12 @@ Caveats:
 ### 2.10 Asset merges: AssetMerge
 
 `Private/AssetMerge.h` and `.cpp`, namespace `JsonBlueprintSync::AssetMerge`. Separate from the JSON sync: it works on the
-UnrealAssetJson merge text that `Tools/uasset-merge.js` saves as `<Project>/Saved/JsonBlueprintSync/Merge/<package path>/merged.txt`
+UAssReader merge text that `Tools/uasset-merge.js` saves as `<Project>/Saved/JsonBlueprintSync/Merge/<package path>/merged.txt`
 after a merge in TortoiseGitMerge.
 
 - `FindMergeFiles(Dir)`: every `merged.txt` below `Dir`; the folder below `Dir` is the package (`Game/A/B` → `/Game/A/B`,
   `MyPlugin/X` → `/MyPlugin/X`). A `merged.txt` directly in `Dir` is ignored.
-- `ParseMergeText`: the first `#` line is the format (`UnrealAssetJson merge text 3`), `# Asset:` the package. Sections are
+- `ParseMergeText`: the first `#` line is the format (`UAssReader merge text 3`), `# Asset:` the package. Sections are
   `[<object>] <class>` (split at the last `] `); lines split at the first ` = ` outside quotes and brackets, because a map key can
   hold ` = `. Conflict markers (`<<<<<<<`, `|||||||`, `=======`, `>>>>>>>`) are collected by line. Errors: a value outside a
   section, no ` = `, an empty section name, a section or a path twice (paths are not checked in `[!ignored]`).
@@ -848,7 +848,7 @@ after a merge in TortoiseGitMerge.
   `(added)` / `(removed)` is **Add** / **Remove**; anything else is **Set**. **Not applicable**: `!graph`, `!native` and other `!`
   paths, `!notdecoded` values on either side, an object only on one side, a changed class (one row for the object, its lines
   skipped). `[!ignored]` is skipped.
-- `FindReader`: `git config --get unrealassetjson.path` run in the project folder (the same setting as the scripts); the file
+- `FindReader`: `git config --get uassreader.path` run in the project folder (the same setting as UAssReader's scripts); the file
   must exist. `RunReader`: `<reader> -merge -s=<Saved/JsonBlueprintSync/Reader-<guid>.txt> -f <asset file>`, reads and deletes the
   output. Both run synchronously on the calling thread.
 - `CheckMergeFile(Location, AssetFile, bAssetDirty, ReadAsset)`: the status. Checked in this order: unreadable `merged.txt` or
