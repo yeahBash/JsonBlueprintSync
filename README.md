@@ -376,16 +376,15 @@ wscript.exe "<absolute path to>\Plugins\JsonBlueprintSync\Tools\uasset-merge.js"
 
 When a merge leaves an asset conflicted, **Edit conflicts** on it in TortoiseGit:
 
-1. The script writes the merge text of the three versions to the asset's merge folder,
+1. The script writes the merge text of the three versions to a temporary folder and opens TortoiseGitMerge on them.
+2. Resolve the conflicts and save. The result goes to `merged.txt` in the asset's merge folder,
    `<Project>/Saved/JsonBlueprintSync/Merge/<package path>/`, for example `Saved/JsonBlueprintSync/Merge/Game/Features/UI/WBP_HUD/`
-   for `/Game/Features/UI/WBP_HUD`. A plugin's assets go under the plugin's name.
-2. It opens TortoiseGitMerge on `base.txt`, `ours.txt` and `theirs.txt`. Resolve the conflicts and save: the result goes to
-   `merged.txt` in the merge folder.
-3. The `.uasset` in the working tree stays as it is, which is ours. `info.json` in the merge folder records the asset and the
-   SHA-256 of the three versions.
+   for `/Game/Features/UI/WBP_HUD`. A plugin's assets go under the plugin's name. `merged.txt` is the only file kept there.
+3. When TortoiseGitMerge closes, the script deletes the temporary folder. The `.uasset` in the working tree stays as it is,
+   which is ours.
 
-If the merge folder already holds a `merged.txt`, the script asks whether to start over. Yes writes the texts again and deletes
-`merged.txt`; No changes nothing.
+If you close TortoiseGitMerge without saving, no merge folder is left. If the merge folder already holds a `merged.txt`, the
+script asks whether to start over. Yes deletes `merged.txt` and opens the merge again; No changes nothing.
 
 The merge is finished when you delete the asset's merge folder. Until then a pre-commit hook refuses commits, because
 committing would keep ours' `.uasset` and lose theirs' changes. Call the hook from `.git/hooks/pre-commit` in the repository:
@@ -397,8 +396,26 @@ sh "<path from the repository root to>/Plugins/JsonBlueprintSync/Tools/pre-commi
 
 Don't use `core.hooksPath` for it: that turns off the hooks Git LFS keeps in `.git/hooks`.
 
-The plugin doesn't apply `merged.txt` yet (planned). Until it does, set the values from `merged.txt` by hand in the editor,
-then delete the merge folder.
+In the editor, the console command `JsonBlueprintSync.Merges` lists each merge in the output log: its status, and what it would
+change in the asset. The plugin runs the reader (`git config unrealassetjson.path`) on the saved asset and compares its text with
+`merged.txt` line by line, so the list is right whichever side's `.uasset` is in the working tree. Rows are **Set**, **Add** or
+**Remove** (map and set entries), **Reset** (the line isn't in `merged.txt`: back to the inherited value), or **Not applicable**
+(graphs, values the reader can't decode, added or removed objects, a changed class).
+
+`JsonBlueprintSync.ApplyMerge <package> [save]` applies the **Set** and **Reset** rows of a merge whose status is **Ready**,
+e.g. `JsonBlueprintSync.ApplyMerge /Game/Features/UI/WBP_HUD save`. Each value is written by its path, struct members one by
+one, the way the Details panel writes it: child Blueprints and other assets that still had the old value get the new one, and
+their own overrides stay. A Reset takes the parent's value. All rows go into one undo step (Edit > Undo). Each row is logged as
+Applied, Unchanged or Failed with the reason. These rows fail, and the others are still applied:
+
+- Arrays, maps, sets and instanced structs. They aren't applied yet (planned).
+- Values the Details panel can't edit, and values that hold an object of their own (instanced subobjects).
+- Properties the asset doesn't have, for example after a rename, and values that can't be read.
+- **Not applicable** rows.
+
+Without `save` the asset is left modified for you to check and save. With `save` a Blueprint is compiled and the asset saved;
+in a run with `-unattended` the editor doesn't save, and the log says so. Make the failed rows by hand, save, check that
+`JsonBlueprintSync.Merges` says **Done**, then delete the merge folder. A merge window in the editor is planned.
 
 ## Limitations
 

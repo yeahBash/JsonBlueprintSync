@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 
+class FProperty;
 class UObject;
 struct FAssetData;
 
@@ -104,6 +105,13 @@ namespace JsonBlueprintSync
 
 	/** Blueprints: MarkBlueprintAsModified. Data assets: marks the package dirty. */
 	JSONBLUEPRINTSYNC_API void MarkModified(UObject* Asset);
+
+	/**
+	 * Parses property text (the Details-panel copy/paste format) into Dest, strictly: the whole text must be read, and nothing may be
+	 * reported, including unknown struct fields, which Unreal reports only at Verbose. Struct text that lists only some fields leaves
+	 * the others as they are in Dest.
+	 */
+	JSONBLUEPRINTSYNC_API bool ImportValue(const FProperty* Property, const FString& Text, void* Dest, UObject* Owner, FString& OutError);
 
 	/** Apply in ascending order: parent Blueprints before children, Blueprints before data assets (whose class may be one of them). */
 	JSONBLUEPRINTSYNC_API int32 GetApplyOrder(const UObject* Asset);

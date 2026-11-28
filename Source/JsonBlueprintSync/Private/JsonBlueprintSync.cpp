@@ -322,6 +322,7 @@ namespace
 			Out.Add(Property->GetName(), MoveTemp(Text));
 		}
 	}
+}
 
 	bool ImportValue(const FProperty* Property, const FString& Text, void* Dest, UObject* Owner, FString& OutError)
 	{
@@ -355,6 +356,8 @@ namespace
 		return true;
 	}
 
+namespace
+{
 	struct FWriteTarget
 	{
 		UClass* Class = nullptr;

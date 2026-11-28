@@ -1,10 +1,9 @@
 // TortoiseGit merge tool for .uasset and .umap files. It doesn't merge the asset: it writes the
-// UnrealAssetJson merge text of base, ours and theirs to the asset's merge folder in the project's
-// Saved folder and opens TortoiseGitMerge on them. The result goes to merged.txt there, never over
-// the asset; the .uasset in the working tree stays ours. The plugin applies merged.txt in the editor.
-//
-// Merge folder: <Project>/Saved/JsonBlueprintSync/Merge/<package path>/ with base.txt, ours.txt,
-// theirs.txt, merged.txt (written by TortoiseGitMerge) and info.json.
+// UnrealAssetJson merge text of base, ours and theirs to a temporary folder and opens
+// TortoiseGitMerge on them. The result goes to merged.txt in the asset's merge folder,
+// <Project>/Saved/JsonBlueprintSync/Merge/<package path>/, never over the asset; the .uasset in
+// the working tree stays ours. The plugin compares merged.txt with the asset in the editor and
+// applies it.
 //
 // Setup: TortoiseGit > Settings > Diff Viewer > Merge Tool > Advanced, add .uasset and .umap with
 //   wscript.exe "<path to>\Tools\uasset-merge.js" %base %mine %theirs %merged %bname %yname %tname //E:javascript
@@ -35,20 +34,6 @@ function Quote(Text)
 function SingleQuote(Path)
 {
 	return "'" + Path.replace(/\\/g, "/").replace(/'/g, "'\\''") + "'";
-}
-
-// ASCII only, so the file reads the same in any code page.
-function JsonString(Text)
-{
-	return "\"" + Text.replace(/[\\"]/g, "\\$&").replace(/[\x00-\x1f\x7f-\uffff]/g, function (C)
-	{
-		return "\\u" + ("000" + C.charCodeAt(0).toString(16)).slice(-4);
-	}) + "\"";
-}
-
-function Pad(Number)
-{
-	return (Number < 10 ? "0" : "") + Number;
 }
 
 function CreateFolders(Folder)
@@ -162,8 +147,8 @@ var MergeFolder = Project + "\\Saved\\JsonBlueprintSync\\Merge" + PackagePath.re
 var MergedText = MergeFolder + "\\merged.txt";
 if (Fso.FileExists(MergedText))
 {
-	var Answer = Shell.Popup("A merge of " + PackagePath + " is already saved in\n" + MergeFolder + "\n\n"
-		+ "Start over? Yes writes the texts again and deletes merged.txt. No leaves the merge folder as it is.", 0, Title, 4 + 32);
+	var Answer = Shell.Popup("A merge of " + PackagePath + " is already saved in\n" + MergedText + "\n\n"
+		+ "Start over? Yes deletes merged.txt and opens the merge again. No leaves it as it is.", 0, Title, 4 + 32);
 	if (Answer != 6)
 	{
 		WScript.Quit(1);
@@ -172,98 +157,56 @@ if (Fso.FileExists(MergedText))
 }
 CreateFolders(MergeFolder);
 
+// The three texts are only needed while TortoiseGitMerge is open.
 var Temp = Fso.GetSpecialFolder(2) + "\\uasset-merge-" + Fso.GetTempName().replace(/\W/g, "");
 Fso.CreateFolder(Temp);
 var ErrorLog = Temp + "\\error.txt";
 
-function RunSh(Command, What)
+function Cleanup()
 {
-	var Exit = Shell.Run(Quote(Sh) + " -c " + Quote(Command + " 2>" + SingleQuote(ErrorLog)), 0, true);
-	if (Exit != 0)
+	try { Fso.DeleteFolder(Temp, true); } catch (e) {}
+	// TortoiseGitMerge closed without saving: leave no empty merge folder behind.
+	try
 	{
-		var Message = Fso.FileExists(ErrorLog) && Fso.GetFile(ErrorLog).Size > 0 ? ReadText(ErrorLog) : "exit code " + Exit;
-		try { Fso.DeleteFolder(Temp, true); } catch (e) {}
-		Fail(What + ":\n" + Message);
-	}
-}
-
-// The SHA-256 of the real file. A Git LFS pointer names it, so the object isn't needed.
-function Sha256(File)
-{
-	if (Fso.GetFile(File).Size < 1024)
-	{
-		var Pointer = /^version https:\/\/git-lfs\.github\.com\/spec\/v1[\s\S]*\noid sha256:([0-9a-f]{64})/.exec(ReadText(File));
-		if (Pointer)
+		var Folder = Fso.GetFolder(MergeFolder);
+		if (Folder.Files.Count == 0 && Folder.SubFolders.Count == 0)
 		{
-			return Pointer[1];
+			Fso.DeleteFolder(MergeFolder);
 		}
 	}
-	var Out = Temp + "\\sha256.txt";
-	RunSh("sha256sum < " + SingleQuote(File) + " | cut -d ' ' -f 1 > " + SingleQuote(Out), "sha256sum failed on " + File);
-	return ReadText(Out).replace(/\s+$/, "");
+	catch (e) {}
 }
 
 // An added or deleted file comes as an empty file: its text is empty.
 function Convert(File, Text)
 {
+	if (!Fso.FileExists(File))
+	{
+		Cleanup();
+		Fail("File not found: " + File);
+	}
 	if (Fso.GetFile(File).Size == 0)
 	{
 		Fso.CreateTextFile(Text, true).Close();
-		return "";
+		return;
 	}
-	RunSh("sh " + SingleQuote(Tools + "\\uasset-textconv.sh") + " " + SingleQuote(File) + " " + SingleQuote(Text),
-		"uasset-textconv.sh failed on " + File);
-	return Sha256(File);
-}
-
-var Inputs = [["base", Base, BaseName], ["ours", Mine, MineName], ["theirs", Theirs, TheirsName]];
-var Hashes = {};
-for (var i = 0; i < Inputs.length; i++)
-{
-	if (!Fso.FileExists(Inputs[i][1]))
+	var Command = "sh " + SingleQuote(Tools + "\\uasset-textconv.sh") + " " + SingleQuote(File) + " " + SingleQuote(Text);
+	var Exit = Shell.Run(Quote(Sh) + " -c " + Quote(Command + " 2>" + SingleQuote(ErrorLog)), 0, true);
+	if (Exit != 0)
 	{
-		Fail("File not found: " + Inputs[i][1]);
+		var Message = Fso.FileExists(ErrorLog) && Fso.GetFile(ErrorLog).Size > 0 ? ReadText(ErrorLog) : "exit code " + Exit;
+		Cleanup();
+		Fail("uasset-textconv.sh failed on " + File + ":\n" + Message);
 	}
-	Hashes[Inputs[i][0]] = Convert(Inputs[i][1], MergeFolder + "\\" + Inputs[i][0] + ".txt");
 }
-try { Fso.DeleteFolder(Temp, true); } catch (e) {}
-
-// The format line of the merge text, e.g. "UnrealAssetJson merge text 3".
-var Format = "";
-var FirstLine = /^# (.*)/.exec(ReadText(MergeFolder + "\\ours.txt"));
-if (FirstLine)
-{
-	Format = FirstLine[1];
-}
-
-var Now = new Date();
-var Stamp = Now.getUTCFullYear() + "-" + Pad(Now.getUTCMonth() + 1) + "-" + Pad(Now.getUTCDate()) + "T"
-	+ Pad(Now.getUTCHours()) + ":" + Pad(Now.getUTCMinutes()) + ":" + Pad(Now.getUTCSeconds()) + "Z";
-var Info = "{\n"
-	+ "\t\"version\": 1,\n"
-	+ "\t\"asset\": " + JsonString(PackagePath) + ",\n"
-	+ "\t\"file\": " + JsonString(Asset.substr(Project.length + 1).replace(/\\/g, "/")) + ",\n"
-	+ "\t\"format\": " + JsonString(Format) + ",\n"
-	+ "\t\"date\": " + JsonString(Stamp) + ",\n"
-	+ "\t\"sha256\": {\n";
-for (var i = 0; i < Inputs.length; i++)
-{
-	Info += "\t\t" + JsonString(Inputs[i][0]) + ": " + JsonString(Hashes[Inputs[i][0]]) + (i + 1 < Inputs.length ? "," : "") + "\n";
-}
-Info += "\t},\n"
-	+ "\t\"names\": {\n";
-for (var i = 0; i < Inputs.length; i++)
-{
-	Info += "\t\t" + JsonString(Inputs[i][0]) + ": " + JsonString(Inputs[i][2]) + (i + 1 < Inputs.length ? "," : "") + "\n";
-}
-Info += "\t}\n}\n";
-var InfoFile = Fso.CreateTextFile(MergeFolder + "\\info.json", true);
-InfoFile.Write(Info);
-InfoFile.Close();
+Convert(Base, Temp + "\\base.txt");
+Convert(Mine, Temp + "\\ours.txt");
+Convert(Theirs, Temp + "\\theirs.txt");
 
 var Exit = Shell.Run(Quote(Merge)
-	+ " /base:" + Quote(MergeFolder + "\\base.txt") + " /basename:" + Quote(BaseName)
-	+ " /mine:" + Quote(MergeFolder + "\\ours.txt") + " /minename:" + Quote(MineName)
-	+ " /theirs:" + Quote(MergeFolder + "\\theirs.txt") + " /theirsname:" + Quote(TheirsName)
+	+ " /base:" + Quote(Temp + "\\base.txt") + " /basename:" + Quote(BaseName)
+	+ " /mine:" + Quote(Temp + "\\ours.txt") + " /minename:" + Quote(MineName)
+	+ " /theirs:" + Quote(Temp + "\\theirs.txt") + " /theirsname:" + Quote(TheirsName)
 	+ " /merged:" + Quote(MergedText) + " /mergedname:" + Quote(PackagePath + " (merged text)"), 1, true);
+Cleanup();
 WScript.Quit(Exit);
