@@ -97,7 +97,9 @@ Source/JsonDataAssetSync/
     SJsonSyncPanel.h / .cpp          the JSON Sync tab
     SJsonSyncStatusBar.h / .cpp      the status bar entry
     JsonDataAssetSyncCommandlet.h / .cpp  -run=JsonDataAssetSync
-    Tests/JsonDataAssetSyncTests.cpp automation tests
+    Tests/JsonDataAssetSyncTests.cpp           automation tests of the library
+    Tests/JsonDataAssetSyncSubsystemTests.cpp  automation tests of the subsystem
+    Tests/JsonDataAssetSyncTestAsset.h         their data asset class (hidden from class pickers)
 ```
 
 ### 2.1 JsonDataAssetSync.uplugin
@@ -798,8 +800,9 @@ Caveats:
 
 ### 2.10 Automation tests
 
-`Private/Tests/JsonDataAssetSyncTests.cpp` holds 12 tests under `JsonDataAssetSync.*`. They are compiled only with
-`WITH_DEV_AUTOMATION_TESTS`. `FTestData` builds a Blueprint data asset class (a subclass of `UPrimaryDataAsset` with a double, a
+There are 18 tests under `JsonDataAssetSync.*`, compiled only with `WITH_DEV_AUTOMATION_TESTS`.
+
+`Private/Tests/JsonDataAssetSyncTests.cpp` holds the 12 tests of the library. `FTestData` builds a Blueprint data asset class (a subclass of `UPrimaryDataAsset` with a double, a
 linear colour, an int array and a class-only variable) and a data asset of it, in `/Temp` packages, so they never touch project
 content or the JSON folder. `MissingPairs` uses a JSON folder of its own under `Saved/` and deletes it afterwards.
 
@@ -818,9 +821,32 @@ content or the JSON folder. `MissingPairs` uses a JSON folder of its own under `
 | `DataAsset` | `IsDataAsset` for a data asset, its class Blueprint, a class default, null and a package; `Apply` refuses a non-data asset |
 | `MissingPairs` | a JSON without its asset is reported, one in an excluded folder is not, assets are synced and sorted, an asset with its JSON is in neither list |
 
-What the tests do **not** cover: the subsystem itself (save guard, Detect, start-up and saved hashes, automatic apply, undo and
-redo, rename, delete, the missing-pair toast), the tab and the commandlet. Its decision rules are covered through `ChooseBase` and
-`CanAutoApply`. [ManualTests.md](ManualTests.md) covers those by hand.
+`Private/Tests/JsonDataAssetSyncSubsystemTests.cpp` holds the 6 tests of the subsystem, under `JsonDataAssetSync.Subsystem.*`.
+They run on the editor's own subsystem. `FSubsystemScope` (a friend of the subsystem) swaps its cache, pending, resolved and undone
+state for empty ones and points `JsonDir`, `Mode` and `ExcludedFolders` at a test setup, with the JSON folder and cache under
+`Saved/JsonDataAssetSyncTests/<Test>`. The data assets are of `UJsonDataAssetSyncTestAsset`, a native class (`Speed`, `Count`),
+so that they can be saved to `/Game/JsonDataAssetSyncTests` without a class Blueprint. A save goes through `UPackage::SavePackage`,
+which runs the subsystem's save handler as an editor save does. Afterwards the scope deletes the files and restores everything.
+Two more things the scope does:
+
+- It sets `GIsRunningUnattendedScript`, because with `-unattended` `FEditorFileUtils::PromptForCheckoutAndSave` cancels instead of
+  saving (an unattended script saves directly).
+- It ignores the missing-pair warnings each sync logs for the project's own data assets, which have no JSON in the test folder.
+
+A manual Apply JSON leaves an undo step for a deleted test asset, so run them headless.
+
+| Test | Covers |
+|---|---|
+| `WriteOnSave` | a save writes the JSON (class defaults left out) and records the sync; the next save writes the new value; a sync then does nothing |
+| `Automatic` | a JSON-only change is applied and saved; with unsaved edits it is listed instead, without a base (every key `Both`); Write JSON keeps the asset's values |
+| `Manual` | a JSON change is listed with a base (`Json` key), the asset untouched; Apply and Save applies, saves and records the sync |
+| `SaveGuard` | a save after the JSON changed (no sync in between) does not write the JSON and lists the asset without a base; applying one key and saving writes the taken and the kept values |
+| `AssetChanged` | a new `.uasset` with its old JSON is listed as out of date (`Asset` key), not applied in Automatic mode, and the next save writes the JSON |
+| `MissingFiles` | a listed asset whose JSON is deleted is dropped from the list and the cache; a listed JSON whose asset is gone is forgotten, its file kept |
+
+What the tests do **not** cover: the start-up sync (the subsystem tests call `SyncFromJson` themselves), changed after review
+through the subsystem, the automatic apply's checks for the undo history, undo and redo, rename, delete, the toasts, the tab and
+the commandlet. [ManualTests.md](ManualTests.md) covers those by hand.
 
 ## 3. End-to-end flows
 

@@ -333,8 +333,10 @@ Automation tests are under `JsonDataAssetSync.*`:
 UnrealEditor-Cmd.exe <Project>.uproject -ExecCmds="Automation RunTests JsonDataAssetSync" -TestExit="Automation Test Queue Empty" -unattended -nullrhi -nosplash
 ```
 
-They cover the library and the subsystem's decision rules (which base to use, when Automatic mode applies on its own, missing
-pairs), not the editor subsystem itself, the JSON Sync tab or the commandlet. [Docs/ManualTests.md](Docs/ManualTests.md)
+They cover the library, the subsystem's decision rules (which base to use, when Automatic mode applies on its own, missing
+pairs) and its main paths (write on save, Automatic and Manual sync, the save guard, an out-of-date JSON, missing files). They
+create and delete test assets under `/Game/JsonDataAssetSyncTests`, so run them headless. The JSON Sync tab, undo and redo, rename
+and delete and the commandlet are not covered. [Docs/ManualTests.md](Docs/ManualTests.md)
 is a step-by-step checklist for those.
 
 ## How it works

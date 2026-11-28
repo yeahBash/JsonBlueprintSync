@@ -15,6 +15,11 @@ class UPackage;
 class FObjectPostSaveContext;
 struct FAssetData;
 
+namespace JsonDataAssetSync::Tests
+{
+	struct FSubsystemScope;
+}
+
 /**
  * Keeps the JSON files in sync with the data assets while the editor runs (see the plugin README.md):
  * - Saving a data asset writes its JSON, unless the JSON has changes that are not reviewed yet (then the asset is "pending").
@@ -109,6 +114,9 @@ public:
 	static void OpenSyncTab();
 
 private:
+	/** The subsystem tests swap the state for their own while they run (Tests/JsonDataAssetSyncSubsystemTests.cpp). */
+	friend struct JsonDataAssetSync::Tests::FSubsystemScope;
+
 	struct FPending
 	{
 		/** Unset if the file cannot be parsed. */

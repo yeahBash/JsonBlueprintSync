@@ -1,8 +1,9 @@
 # JsonDataAssetSync manual tests
 
 A checklist for checking the plugin by hand in the editor and on the command line. The automated tests cover the library (capture,
-apply, format, merge, cache, missing pairs) and the rules for choosing a base and for applying automatically, but not the editor
-subsystem, the JSON Sync tab or the commandlet. Those are covered here. For how things work and why, see
+apply, format, merge, cache, missing pairs), the rules for choosing a base and for applying automatically, and the subsystem's main
+paths (write on save, Automatic and Manual sync, the save guard, an out-of-date JSON, missing files). They do not cover the start-up
+sync, undo and redo, rename and delete, the toasts, the JSON Sync tab or the commandlet. Those are covered here. For how things work and why, see
 [Internals.md](Internals.md).
 
 Each test has steps and the expected result. Tests marked **(known issue)** describe current behaviour that is a known weak spot.
@@ -35,7 +36,7 @@ Close the editor, or run them from a second shell while it is open (it is slower
 
 `-TestExit` quits once the tests have run. Do not add `Quit` to `-ExecCmds`: it runs before the tests, and the process hangs.
 
-Expected: 12 tests, each logging `Result={Success}`, and no `Result={Fail}`. The full log is in `Saved/Logs/<Project>.log`.
+Expected: 18 tests, each logging `Result={Success}`, and no `Result={Fail}`. The full log is in `Saved/Logs/<Project>.log`.
 To filter it: `Select-String -Path Saved\Logs\<Project>.log -Pattern "Result=\{"`.
 
 In the editor you can also run them from **Tools > Test Automation**: filter by `JsonDataAssetSync`, tick the group and press
